@@ -2,7 +2,7 @@
 
 **Binôme :** B3 Émulateur & campagnes
 
-Séries de hauteur d'eau réelles, nettoyées, qui alimentent l'émulateur et les tests d'alerte.
+Séries de hauteur d'eau réelles, nettoyées, qui alimentent l'émulateur.
 
 Structure proposée :
 

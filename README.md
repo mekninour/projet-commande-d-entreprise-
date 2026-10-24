@@ -2,15 +2,14 @@
 
 Projet Commande Entreprise n°92, IMT Atlantique (campus de Rennes, FISE, 2026-2027), pour **OPALimpact**.
 
-Ce dépôt contient le code du **sous-projet B** : la chaîne de données qui va du nœud capteur jusqu'au tableau de bord et aux alertes. Le nœud capteur réel est développé à Brest (sous-projet A). Les deux équipes sont reliées par un [contrat d'interface](docs/contrat_interface.md) : une trame de 12 octets.
+Ce dépôt contient le code du **sous-projet B** : la chaîne de données qui va du nœud capteur jusqu'au tableau de bord. Le nœud capteur réel est développé à Brest (sous-projet A). Les deux équipes sont reliées par un [contrat d'interface](docs/contrat_interface.md) : une trame de 12 octets.
 
 ## Architecture
 
 ```
  Émulateur ESP32 ──LoRaWAN 868 MHz──> Passerelle Raspberry Pi ──> ChirpStack ──MQTT──> Node-RED
- (emulateur/)                         + concentrateur RAK5146      (passerelle/)          (plateforme/, alertes/)
+ (emulateur/)                         + concentrateur RAK5146      (passerelle/)          (plateforme/)
                                                                                            ├─ stockage de l'historique
-                                                                                           ├─ moteur d'alerte
                                                                                            └─ tableaux de bord
 ```
 
@@ -24,7 +23,6 @@ Enjeu central : **mesurer le gain** d'une transmission optimisée (moins de tram
 | [`emulateur/`](emulateur/) | Code ESP32 : pile LoRaWAN, rejeu des séries, modes d'émission, compteurs, tampon côté nœud | B3 |
 | [`passerelle/`](passerelle/) | Raspberry Pi, concentrateur RAK, ChirpStack, stockage local, tests de coupure | B1 |
 | [`plateforme/`](plateforme/) | Flux Node-RED, stockage, injecteur de trames de test, tableaux de bord | B1 |
-| [`alertes/`](alertes/) | Seuils par site, moteur et objet d'alerte, export OPAL | B2 |
 | [`donnees/`](donnees/) | Scénarios Vigicrues nettoyés et leur format | B3 |
 | [`mesures/`](mesures/) | Protocole du banc, données brutes des campagnes, analyse | B2, B3, B1 |
 | [`docs/`](docs/) | Contrat d'interface, fiches de formation, documentation d'installation | Tous |

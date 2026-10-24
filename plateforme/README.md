@@ -14,4 +14,4 @@ plateforme/
 └── dashboards/     # vue simple (non technique) et vue technique
 ```
 
-L'injecteur permet à B2 de travailler sur les alertes sans passerelle ni ESP32.
+L'injecteur permet de tester la plateforme sans passerelle ni ESP32.

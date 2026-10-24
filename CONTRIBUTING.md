@@ -9,7 +9,7 @@ Des règles courtes, pour que les 6 membres travaillent sur le même dépôt san
 
 ```
 emulateur-rejeu-series
-alertes-moteur
+trame-decodeur
 passerelle-chirpstack-docker
 ```
 

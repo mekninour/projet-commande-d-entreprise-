@@ -1,12 +1,12 @@
-# Fiches de formation (tâches P2a à P2f)
+# Fiches de formation
 
-Une fiche mémo par technologie, rédigée par le responsable de la formation. Déposer la fiche ici (Markdown ou lien vers le Drive) et cocher la tâche dans l'issue correspondante.
+Une fiche mémo par technologie. Déposer la fiche ici (Markdown ou lien vers le Drive).
 
-| ID | Formation | Responsable | Fiche |
-|---|---|---|---|
-| P2a | LoRaWAN : classe A, OTAA, duty cycle, SF | Gaetan Boulard | À déposer |
-| P2b | ChirpStack : installation, application, profils, passerelle, MQTT | Nour Mekni | À déposer |
-| P2c | Node-RED : flux, MQTT, dashboard, stockage | Sasha Le Roux | À déposer |
-| P2d | ESP32 + LoRa : LMIC ou RadioLib, sommeil profond, port série | Mathéo Vignaud | [Fiche mémo P2d](https://claude.ai/artifact/5kFWz2oFtPjcBbafWSezLG) |
-| P2e | Raspberry Pi et MQTT : SSH, services, broker, redémarrage auto | Mohamed Amine Dahbi | À déposer |
-| P2f | Données Vigicrues : récupération, format, scénarios | Brahima Diarrassouba | À déposer |
+| Formation | Responsable | Fiche |
+|---|---|---|
+| LoRaWAN : classe A, OTAA, duty cycle, SF | Gaetan Boulard | À déposer |
+| ChirpStack : installation, application, profils, passerelle, MQTT | Nour Mekni | À déposer |
+| Node-RED : flux, MQTT, dashboard, stockage | Sasha Le Roux | À déposer |
+| ESP32 + LoRa : RadioLib ou LMIC, sommeil profond, port série | Mathéo Vignaud | À déposer |
+| Raspberry Pi et MQTT : SSH, services, broker, redémarrage auto | Mohamed Amine Dahbi | À déposer |
+| Données Vigicrues : récupération, format, scénarios | Brahima Diarrassouba | À déposer |

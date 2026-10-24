@@ -49,5 +49,5 @@ Scénarios à fournir à l'émulateur : régime nominal, montée de crue rapide,
 | N° | Point | Hypothèse de travail de l'équipe B | À trancher par |
 |---|---|---|---|
 | 1 | `batt_cv` en « centivolts » : 158 donnerait 1,58 V et non 3,16 V, et un uint8 plafonne à 2,55 V | 20 mV par unité (158 × 0,02 = 3,16 V ; 4,2 V = 210) | Brest et le client |
-| 2 | « Premier bit » de `status` : MSB (0x80) ou LSB (0x01) ? Position des autres bits non définie | En attente | Brest (tâche P4) |
+| 2 | « Premier bit » de `status` : MSB (0x80) ou LSB (0x01) ? Position des autres bits non définie | **MSB (0x80)**, décidé à la réunion Brest–Rennes du 16/10 (la proposition écrite de Brest indiquait le LSB) | Brest, confirmation écrite ; position des autres bits encore ouverte |
 | 3 | Datation d'une mesure si la cadence varie (`seq` ne suffit pas) | Horodatage de la passerelle | Équipe B, à documenter |

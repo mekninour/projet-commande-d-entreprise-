@@ -1,6 +1,8 @@
 # Scénarios de crue (Vigicrues)
 
-Séries de hauteur d'eau réelles, nettoyées, qui alimentent l'émulateur (E4) et les tests d'alerte (AL7).
+**Binôme :** B3 Émulateur & campagnes
+
+Séries de hauteur d'eau réelles, nettoyées, qui alimentent l'émulateur et les tests d'alerte.
 
 Structure proposée :
 
@@ -12,11 +14,3 @@ donnees/
 ```
 
 Les scénarios suivent la section 6 du contrat d'interface.
-
-## Tâches du L2
-
-| ID | Tâche | Critère de fin | Responsable | Dépend de | Période |
-|---|---|---|---|---|---|
-| E3 | Jeux de données Vigicrues | 4–5 scénarios nettoyés, format documenté | Brahima Diarrassouba | P2f | Socle |
-
-État à jour : voir les issues GitHub correspondantes.

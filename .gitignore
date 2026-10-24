@@ -1,0 +1,43 @@
+# --- Secrets : ne JAMAIS commiter de clés ---
+secrets.h
+*.env
+.env*
+!.env.example
+**/chirpstack/**/*.key
+**/chirpstack/**/*.pem
+
+# --- ESP32 / PlatformIO / Arduino ---
+.pio/
+.pioenvs/
+.piolibdeps/
+build/
+*.bin
+*.elf
+
+# --- Node-RED (identifiants et fichiers d'exécution) ---
+flows_cred.json
+*_cred.json
+.config.*.json
+.node-red/
+node_modules/
+
+# --- Python ---
+__pycache__/
+*.pyc
+.venv/
+venv/
+.ipynb_checkpoints/
+
+# --- Docker / bases locales ---
+**/data/postgres/
+**/data/redis/
+*.sqlite
+*.db
+
+# --- Éditeurs et systèmes ---
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
+*.swp

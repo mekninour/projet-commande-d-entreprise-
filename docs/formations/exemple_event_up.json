@@ -1,0 +1,37 @@
+{
+  "deduplicationId": "3b9c1e2a-5d4f-4a8e-9c71-2f6d8e0a1b23",
+  "time": "2026-11-02T10:00:00.123Z",
+  "deviceInfo": {
+    "tenantName": "ChirpStack",
+    "applicationId": "<appID>",
+    "applicationName": "pce92-crues",
+    "deviceProfileName": "PCE92 – Noeud crue EU868",
+    "deviceName": "emulateur-esp32-01",
+    "devEui": "<devEUI>"
+  },
+  "devAddr": "01a2b3c4",
+  "adr": true,
+  "dr": 5,
+  "fCnt": 12,
+  "fPort": 1,
+  "confirmed": false,
+  "data": "AAME2J4AnQAAAAAA",
+  "object": {
+    "node_id": 3,
+    "water_mm": 1240,
+    "batt_cv": 158,
+    "batt_v": 3.16,
+    "seq": 157,
+    "status": 0,
+    "alert": false,
+    "sensor_fault": false,
+    "eco_mode": false
+  },
+  "rxInfo": [
+    { "gatewayId": "aa555a0000000001", "rssi": -57, "snr": 9.5, "time": "2026-11-02T10:00:00.100Z" }
+  ],
+  "txInfo": {
+    "frequency": 868100000,
+    "modulation": { "lora": { "bandwidth": 125000, "spreadingFactor": 7, "codeRate": "CR_4_5" } }
+  }
+}

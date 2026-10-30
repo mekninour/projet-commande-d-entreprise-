@@ -13,7 +13,6 @@
 //   octets 8-11 réservés  PROPOSITION S4 (annexe B du L1), non validée par Brest :
 //                 octet 8     = version (4 bits hauts) | pas de mesure en min (4 bits bas)
 //                 octets 9-11 = écart en cm (int8 signé) = mesure actuelle - mesure précédente k
-//                 version 0 (tout à zéro) = pas d'extension (cas de l'exemple officiel)
 // =============================================================================
 
 // ---- Hypothèses de travail (à changer ici si Brest décide autrement) --------
@@ -33,8 +32,9 @@ var FRAME_SIZE = 12;
 // Drapeaux de status, dans l'ordre du contrat (1er, 2e, 3e bit).
 var STATUS_FLAGS = ["alert", "sensor_fault", "eco_mode"];
 
+// 1er octet × 256 + 2e octet
 function readUint16(b, i) {
-  return (b[i] << 8) | b[i + 1];
+  return b[i] * 256 + b[i + 1];
 }
 
 function toInt8(byte) {
@@ -49,20 +49,20 @@ function decodeStatus(byte, warnings) {
   var flags = {};
   var knownMask = 0;
   for (var r = 0; r < STATUS_FLAGS.length; r++) {
-    var pos = bitPosition(r);
-    flags[STATUS_FLAGS[r]] = ((byte >> pos) & 1) === 1;
-    knownMask |= 1 << pos;
+    var mask = Math.pow(2, bitPosition(r)); // ex. position 7 -> 128 (0x80)
+    flags[STATUS_FLAGS[r]] = (byte & mask) !== 0;
+    knownMask = knownMask + mask;
   }
   // Un bit inattendu signale souvent une convention différente côté encodeur.
-  if ((byte & ~knownMask & 0xff) !== 0) {
+  if ((byte & (255 - knownMask)) !== 0) {
     warnings.push("status : bits inconnus levés (0x" + byte.toString(16) + ")");
   }
   return flags;
 }
 
 function decodeReserved(b, waterMm, recvTime, warnings) {
-  var version = b[8] >> 4;
-  var stepMin = b[8] & 0x0f;
+  var version = Math.floor(b[8] / 16); // 4 bits hauts
+  var stepMin = b[8] % 16;             // 4 bits bas
   var measurements = [{ index: 0, offset_min: 0, water_mm: waterMm }];
 
   if (version === 0) {

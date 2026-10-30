@@ -1,2 +1,5 @@
 nom,hex,node_id,water_mm,batt_raw,seq,status,source
 exemple_officiel,00 03 04 D8 9E 00 9D 00 00 00 00 00,3,1240,158,157,0,contrat d'interface section 4
+alerte_msb,00 03 09 2E BE 00 9E 80 00 00 00 00,3,2350,190,158,128,bit d'alerte MSB (réunion Brest-Rennes du 16/10)
+defaut_capteur_mode_eco,00 0C 00 00 69 FF FF 60 00 00 00 00,12,0,105,65535,96,status 0x60 ; seq au maximum ; batterie basse 2.10 V
+valeurs_max,FF FF FF FF D2 00 00 00 00 00 00 00,65535,65535,210,0,0,bornes hautes ; batterie 4.20 V ; seq repassé à 0

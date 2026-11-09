@@ -1,0 +1,184 @@
+[
+  {
+    "id": "a1b2c3d4e5f60001",
+    "type": "tab",
+    "label": "S2 – Réception des trames",
+    "disabled": false,
+    "info": "Tâche S2 (B1). pce92/uplink -> décodage (codec S1) -> contrôle seq -> pce92/mesures/<node_id> et pce92/evenements.\nVoir plateforme/flows/README.md."
+  },
+  {
+    "id": "a1b2c3d4e5f60002",
+    "type": "mqtt-broker",
+    "name": "Mosquitto local",
+    "broker": "localhost",
+    "port": "1883",
+    "clientid": "",
+    "autoConnect": true,
+    "usetls": false,
+    "protocolVersion": "4",
+    "keepalive": "60",
+    "cleansession": true,
+    "autoUnsubscribe": true,
+    "birthTopic": "",
+    "closeTopic": "",
+    "willTopic": ""
+  },
+  {
+    "id": "a1b2c3d4e5f60010",
+    "type": "comment",
+    "z": "a1b2c3d4e5f60001",
+    "name": "S2 : trame brute -> mesure normalisée (contrat v1.2)",
+    "info": "",
+    "x": 230,
+    "y": 40,
+    "wires": []
+  },
+  {
+    "id": "a1b2c3d4e5f60011",
+    "type": "mqtt in",
+    "z": "a1b2c3d4e5f60001",
+    "name": "Trames reçues",
+    "topic": "pce92/uplink",
+    "qos": "1",
+    "datatype": "json",
+    "broker": "a1b2c3d4e5f60002",
+    "nl": false,
+    "rap": true,
+    "rh": 0,
+    "inputs": 0,
+    "x": 130,
+    "y": 120,
+    "wires": [
+      [
+        "a1b2c3d4e5f60012"
+      ]
+    ]
+  },
+  {
+    "id": "a1b2c3d4e5f60012",
+    "type": "function",
+    "z": "a1b2c3d4e5f60001",
+    "name": "1. Décoder (codec S1)",
+    "func": "// S2 – Étape 1 : décoder la trame brute et produire une mesure normalisée.\n// Entrée : message du récepteur (ou de l'injecteur) sur pce92/uplink\n//   { received_at, payload_hex, rssi, snr, source }\n// Sortie 1 : mesure normalisée. Sortie 2 : trame rejetée.\nconst codec = global.get(\"codec\");\nif (!codec) {\n    node.error(\"Codec S1 non chargé : ajouter codec dans functionGlobalContext (voir plateforme/flows/README.md)\");\n    node.status({ fill: \"red\", shape: \"ring\", text: \"codec absent\" });\n    return null;\n}\n\nconst entree = msg.payload || {};\nconst recuA = entree.received_at || new Date().toISOString(); // règle 4 : horodatage à la réception\n\nfunction rejet(raison) {\n    node.warn(\"Trame rejetée : \" + raison);\n    return [null, {\n        topic: \"pce92/evenements\",\n        payload: { type: \"rejet\", raison: raison, received_at: recuA,\n                   payload_hex: entree.payload_hex || null, source: entree.source || null }\n    }];\n}\n\nif (typeof entree.payload_hex !== \"string\") {\n    return rejet(\"message sans payload_hex\");\n}\nconst hex = entree.payload_hex.replace(/\\s+/g, \"\");\nif (!/^[0-9a-fA-F]*$/.test(hex) || hex.length % 2 !== 0) {\n    return rejet(\"payload_hex n'est pas de l'hexadécimal valide\");\n}\n\nconst octets = hex.match(/../g).map(h => parseInt(h, 16));\nconst res = codec.decodeUplink({ bytes: octets });\nif (res.errors) {\n    return rejet(res.errors.join(\" ; \"));\n}\n\nconst d = res.data;\nmsg.topic = \"pce92/mesures/\" + d.node_id;\nmsg.payload = {\n    node_id: d.node_id,\n    received_at: recuA,\n    water_mm: d.water_valid ? d.water_mm : null,  // null = mesure invalide (0xFFFF)\n    water_valid: d.water_valid,\n    batt_v: d.batt_v,                             // null = tension inconnue (0xFF)\n    seq: d.seq,\n    alert: d.alert,\n    next_min: d.next_min,                         // null = inconnu (0xFF)\n    expected_next_at: d.next_min === null ? null\n        : new Date(Date.parse(recuA) + d.next_min * 60000).toISOString(),\n    rssi: entree.rssi ?? null,\n    snr: entree.snr ?? null,\n    source: entree.source ?? null,\n    payload_hex: hex.toUpperCase(),\n    warnings: res.warnings\n};\nif (res.warnings.length) {\n    node.warn(\"Nœud \" + d.node_id + \", seq \" + d.seq + \" : \" + res.warnings.join(\" ; \"));\n}\nnode.status({ fill: d.alert ? \"red\" : \"green\", shape: \"dot\",\n              text: \"nœud \" + d.node_id + \" · seq \" + d.seq + \" · \" + (d.water_valid ? d.water_mm + \" mm\" : \"invalide\") });\nreturn [msg, null];\n",
+    "outputs": 2,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "outputLabels": [
+      "mesure",
+      "rejet"
+    ],
+    "x": 340,
+    "y": 120,
+    "wires": [
+      [
+        "a1b2c3d4e5f60013"
+      ],
+      [
+        "a1b2c3d4e5f60021",
+        "a1b2c3d4e5f60031"
+      ]
+    ]
+  },
+  {
+    "id": "a1b2c3d4e5f60013",
+    "type": "function",
+    "z": "a1b2c3d4e5f60001",
+    "name": "2. Contrôler seq (règle 5)",
+    "func": "// S2 – Étape 2 : contrôler le compteur seq (règle 5 du contrat).\n// Écart = (seq - seq précédent) modulo 65536, par nœud :\n//   = 1 : trame normale ; > 1 : trames perdues ; = 0 : doublon (écarté).\n// Choix B1 (hors contrat) : un écart > 32768 est un retour en arrière du compteur\n// (redémarrage du nœud ou trame en retard) : la mesure est gardée, sans compter de pertes.\n// Sortie 1 : mesure acceptée. Sortie 2 : événement (doublon, pertes, retour en arrière).\nconst m = msg.payload;\nconst cle = \"dernier_seq_\" + m.node_id;\nconst precedent = flow.get(cle);\nconst ecart = precedent === undefined ? null : (m.seq - precedent + 65536) % 65536;\n\nfunction evenement(type, details) {\n    return {\n        topic: \"pce92/evenements\",\n        payload: Object.assign({ type: type, node_id: m.node_id, seq: m.seq, received_at: m.received_at }, details)\n    };\n}\n\nif (ecart === 0) {\n    node.status({ fill: \"yellow\", shape: \"ring\", text: \"doublon écarté · nœud \" + m.node_id + \" · seq \" + m.seq });\n    return [null, evenement(\"doublon\", {})];\n}\n\nlet evt = null;\nm.seq_gap = ecart;\nm.lost_before = 0;\nif (ecart !== null && ecart > 32768) {\n    evt = evenement(\"retour_seq\", { seq_precedent: precedent });\n} else if (ecart !== null && ecart > 1) {\n    m.lost_before = ecart - 1;\n    evt = evenement(\"trames_perdues\", { nombre: ecart - 1, seq_precedent: precedent });\n}\n\nflow.set(cle, m.seq);\nnode.status({ fill: m.lost_before ? \"yellow\" : \"green\", shape: \"dot\",\n              text: \"nœud \" + m.node_id + \" · seq \" + m.seq + (m.lost_before ? \" · \" + m.lost_before + \" perdue(s)\" : \"\") });\nreturn [msg, evt];\n",
+    "outputs": 2,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "outputLabels": [
+      "mesure acceptée",
+      "événement"
+    ],
+    "x": 580,
+    "y": 120,
+    "wires": [
+      [
+        "a1b2c3d4e5f60020",
+        "a1b2c3d4e5f60030"
+      ],
+      [
+        "a1b2c3d4e5f60021",
+        "a1b2c3d4e5f60031"
+      ]
+    ]
+  },
+  {
+    "id": "a1b2c3d4e5f60020",
+    "type": "mqtt out",
+    "z": "a1b2c3d4e5f60001",
+    "name": "Mesures",
+    "topic": "",
+    "qos": "1",
+    "retain": "false",
+    "respTopic": "",
+    "contentType": "",
+    "userProps": "",
+    "correl": "",
+    "expiry": "",
+    "broker": "a1b2c3d4e5f60002",
+    "x": 840,
+    "y": 100,
+    "wires": []
+  },
+  {
+    "id": "a1b2c3d4e5f60021",
+    "type": "mqtt out",
+    "z": "a1b2c3d4e5f60001",
+    "name": "Événements",
+    "topic": "",
+    "qos": "1",
+    "retain": "false",
+    "respTopic": "",
+    "contentType": "",
+    "userProps": "",
+    "correl": "",
+    "expiry": "",
+    "broker": "a1b2c3d4e5f60002",
+    "x": 850,
+    "y": 200,
+    "wires": []
+  },
+  {
+    "id": "a1b2c3d4e5f60030",
+    "type": "debug",
+    "z": "a1b2c3d4e5f60001",
+    "name": "Voir les mesures",
+    "active": true,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "payload",
+    "targetType": "msg",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 860,
+    "y": 140,
+    "wires": []
+  },
+  {
+    "id": "a1b2c3d4e5f60031",
+    "type": "debug",
+    "z": "a1b2c3d4e5f60001",
+    "name": "Voir les événements",
+    "active": true,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "payload",
+    "targetType": "msg",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 870,
+    "y": 240,
+    "wires": []
+  }
+]

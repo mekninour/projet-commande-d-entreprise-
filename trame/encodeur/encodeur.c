@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdint.h>
-#include <assert.h>
+
+#define MAX_LIGNE 256
 
 // Fonction d'encodage
 void encoder_trame(uint16_t node_id, uint16_t water_mm, uint8_t batt_cv, uint16_t seq, uint8_t status, uint8_t next_min, uint8_t *payload) {
@@ -19,24 +20,67 @@ void encoder_trame(uint16_t node_id, uint16_t water_mm, uint8_t batt_cv, uint16_
 }
 
 int main() {
-    // Données de l'exemple du contrat
-    uint16_t node_id = 3;       // 0x0003
-    uint16_t water_mm = 1240;   // 0x04D8
-    uint8_t batt_cv = 158;      // 3,16 V -> 0x9E
-    uint16_t seq = 157;         // 0x009D
-    uint8_t status = 0;         // Sans alerte
-    uint8_t next_min = 30;      // 30 minutes avant le prochain envoi
-
-    uint8_t payload[12];
-    encoder_trame(node_id, water_mm, batt_cv, seq, status, next_min, payload);
-
-    // Résultat attendu du contrat : 00 03 04 D8 9E 00 9D 00 00 00 00 00
-    uint8_t attendu[12] = {0x00, 0x03, 0x04, 0xD8, 0x9E, 0x00, 0x9D, 0x00, 0x1E, 0x00, 0x00, 0x00};
-
-    for (int i = 0; i < 12; i++) {
-        assert(payload[i] == attendu[i]);
+    FILE *fichier = fopen("../exemples/exemples_trames.csv", "r");
+    if (fichier == NULL) {
+        perror("Erreur d'ouverture du fichier CSV");
+        return 1;
     }
 
-    printf("Succes ! La trame est parfaitement encodee selon le contrat.\n");
+    char ligne[MAX_LIGNE];
+    int num_ligne = 0;
+    int tests_ussies = 0;
+
+    while (fgets(ligne, sizeof(ligne), fichier) != NULL) {
+        num_ligne++;
+        if (num_ligne == 1) continue; // Ignorer l'en-tête
+
+        char nom[64];
+        char hex_str[64];
+        uint16_t node_id;
+        uint16_t water_mm;
+        uint8_t batt_raw;
+        uint16_t seq;
+        uint8_t status;
+        uint8_t next_min;
+        char source[128];
+
+        // Lecture de la ligne du CSV (séparateur virgule)
+        int ret = sscanf(ligne, "%63[^,],%63[^,],%hu,%hu,%hhu,%hu,%hhu,%hhu,%127[^\n]", 
+                         nom, hex_str, &node_id, &water_mm, &batt_raw, &seq, &status, &next_min, source);
+
+        if (ret >= 8) {
+            // 1. Génération du payload via votre fonction C
+            uint8_t payload_genere[12];
+            encoder_trame(node_id, water_mm, batt_raw, seq, status, next_min, payload_genere);
+
+            // 2. Conversion de la chaîne hex_str ("00 03 01 ...") en tableau d'octets attendus
+            uint8_t payload_attendu[12];
+            unsigned int valeurs[12];
+            sscanf(hex_str, "%x %x %x %x %x %x %x %x %x %x %x %x", 
+                   &valeurs[0], &valeurs[1], &valeurs[2], &valeurs[3], 
+                   &valeurs[4], &valeurs[5], &valeurs[6], &valeurs[7], 
+                   &valeurs[8], &valeurs[9], &valeurs[10], &valeurs[11]);
+            
+            for(int i = 0; i < 12; i++) {
+                payload_attendu[i] = (uint8_t)valeurs[i];
+            }
+
+            // 3. Comparaison (Vérification automatique)
+            int echec = 0;
+            for(int i = 0; i < 12; i++) {
+                if (payload_genere[i] != payload_attendu[i]) {
+                    echec = 1;
+                    break;
+                }
+            }
+
+            if (echec) {
+                printf("[ECHEC] Ligne %d (%s) : Le payload ne correspond pas au CSV !\n", num_ligne, nom);
+            } else {
+                printf("[SUCCES] Ligne %d (%s) valide.\n", num_ligne, nom);
+                tests_ussies++;
+            }
+        }
+    }
     return 0;
 }

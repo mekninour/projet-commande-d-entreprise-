@@ -10,9 +10,10 @@ Vérifie que :
 import csv
 import sys
 
-from injecteur import RACINE_DEPOT, decoder_avec_codec, encoder_trame
+from injecteur import RACINE_DEPOT, decoder_avec_codec, encoder_trame, volts_vers_5mv
 from scenarios import SCENARIOS, generer
 
+SEUIL = 300
 reussis = echecs = 0
 
 
@@ -29,31 +30,31 @@ def verifier(nom, condition, detail=""):
 print("Trames partagées (exemples_trames.csv)")
 with open(RACINE_DEPOT / "trame" / "exemples" / "exemples_trames.csv", encoding="utf-8") as f:
     for ligne in csv.DictReader(f):
-        status = int(ligne["status"])
+        water = int(ligne["water_mm"])
         octets = encoder_trame(
-            int(ligne["node_id"]), int(ligne["water_mm"]), int(ligne["batt_raw"]) * 20 / 1000,
-            int(ligne["seq"]), bool(status & 0x80), bool(status & 0x40), bool(status & 0x20),
+            int(ligne["node_id"]), None if water == 65535 else water, int(ligne["batt_raw"]),
+            int(ligne["seq"]), int(ligne["status"]) & 1 == 1, int(ligne["next_min"]),
         )
         attendu = bytes.fromhex(ligne["hex"])
         verifier(ligne["nom"], octets == attendu, f"obtenu {octets.hex(' ')} au lieu de {ligne['hex']}")
 
 print("Scénarios relus par le codec S1")
 for nom in sorted(SCENARIOS):
-    etapes = generer(nom, seuil=2000)
-    trames = [
-        (encoder_trame(3, e["water_mm"], e["batt_v"], i + 1, e["alert"], e["sensor_fault"], e["eco_mode"]),
-         "2026-11-02T10:00:00.000Z")
-        for i, e in enumerate(etapes)
-    ]
+    etapes = generer(nom, SEUIL)
+    alertes = [e["water_mm"] is not None and e["water_mm"] >= SEUIL for e in etapes]
+    trames = [encoder_trame(3, e["water_mm"], volts_vers_5mv(e["batt_v"]), i + 1, a, 30)
+              for i, (e, a) in enumerate(zip(etapes, alertes))]
     resultats = decoder_avec_codec(trames)
     ok = all(
         "data" in r
-        and r["data"]["water_mm"] == e["water_mm"]
+        and r["data"]["water_valid"] == (e["water_mm"] is not None)
+        and (e["water_mm"] is None or r["data"]["water_mm"] == e["water_mm"])
+        and (r["data"]["batt_v"] is None) == (e["batt_v"] is None)
+        and (e["batt_v"] is None or abs(r["data"]["batt_v"] - e["batt_v"]) < 0.003)
         and r["data"]["seq"] == i + 1
-        and r["data"]["alert"] == e["alert"]
-        and r["data"]["sensor_fault"] == e["sensor_fault"]
-        and r["data"]["eco_mode"] == e["eco_mode"]
-        for i, (e, r) in enumerate(zip(etapes, resultats))
+        and r["data"]["alert"] == a
+        and r["data"]["next_min"] == 30
+        for i, (e, a, r) in enumerate(zip(etapes, alertes, resultats))
     )
     verifier(f"{nom} ({len(etapes)} trames)", ok)
 

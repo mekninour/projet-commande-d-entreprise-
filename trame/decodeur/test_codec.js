@@ -1,4 +1,4 @@
-// PCE 92 – S1 – Tests du décodeur. Lancer depuis la racine du dépôt :
+// PCE 92 – S1 – Tests du décodeur (contrat v1.2). Lancer depuis la racine du dépôt :
 //   node trame/decodeur/test_codec.js
 // Aucun paquet à installer. Code de sortie 0 = tout est bon.
 const assert = require("assert");
@@ -8,7 +8,7 @@ const { decodeUplink } = require("./codec.js");
 
 const CSV = path.join(__dirname, "..", "exemples", "exemples_trames.csv");
 const toBytes = (hex) => hex.replace(/\s+/g, "").match(/../g).map((h) => parseInt(h, 16));
-const decode = (hex, extra = {}) => decodeUplink({ bytes: toBytes(hex), fPort: 1, ...extra });
+const decode = (hex) => decodeUplink({ bytes: toBytes(hex) });
 
 let passed = 0, failed = 0;
 function test(name, fn) {
@@ -27,60 +27,54 @@ for (const line of rows) {
     const res = decode(row.hex);
     assert.ok(!res.errors, "erreurs : " + res.errors);
     assert.deepStrictEqual(res.warnings, [], "avertissements inattendus");
-    assert.strictEqual(res.data.node_id, Number(row.node_id), "node_id");
-    assert.strictEqual(res.data.water_mm, Number(row.water_mm), "water_mm");
-    assert.strictEqual(res.data.batt_cv, Number(row.batt_raw), "batt_cv");
-    assert.strictEqual(res.data.seq, Number(row.seq), "seq");
-    assert.strictEqual(res.data.status, Number(row.status), "status");
+    const d = res.data;
+    assert.strictEqual(d.node_id, Number(row.node_id), "node_id");
+    assert.strictEqual(d.water_mm, Number(row.water_mm), "water_mm");
+    assert.strictEqual(d.batt_5mv, Number(row.batt_raw), "batt_5mv");
+    assert.strictEqual(d.seq, Number(row.seq), "seq");
+    assert.strictEqual(d.status, Number(row.status), "status");
+    assert.strictEqual(d.next_min, row.next_min === "255" ? null : Number(row.next_min), "next_min");
   });
 }
 
-// --- 2. Interprétation (hypothèses de travail du contrat) --------------------
+// --- 2. Interprétation des champs (contrat v1.2) ------------------------------
 console.log("Interprétation des champs");
-test("batterie : 158 -> 3,16 V (20 mV par unité)", () => {
-  assert.strictEqual(decode("000304D89E009D0000000000").data.batt_v, 3.16);
+test("exemple officiel : 310 mm, 3,15 V, alerte, prochain envoi 5 min", () => {
+  const d = decode("000301368200 9D 01 05 000000").data;
+  assert.deepStrictEqual([d.water_mm, d.water_valid, d.batt_v, d.alert, d.next_min], [310, true, 3.15, true, 5]);
 });
-test("status 0x80 -> alerte seule (MSB)", () => {
-  const d = decode("0003092EBE009E8000000000").data;
-  assert.deepStrictEqual([d.alert, d.sensor_fault, d.eco_mode], [true, false, false]);
+test("batterie : 0x00 -> 2,50 V et 0xFE -> 3,77 V", () => {
+  assert.strictEqual(decode("0003002D00009E001E000000").data.batt_v, 2.5);
+  assert.strictEqual(decode("0003002DFE009E001E000000").data.batt_v, 3.77);
 });
-test("status 0x60 -> défaut capteur + mode éco", () => {
-  const d = decode("000C000069FFFF6000000000").data;
-  assert.deepStrictEqual([d.alert, d.sensor_fault, d.eco_mode], [false, true, true]);
+test("valeurs spéciales : water 0xFFFF invalide, batterie 0xFF et next_min 0xFF inconnus", () => {
+  const d = decode("000CFFFFFFFFFF00FF000000").data;
+  assert.deepStrictEqual([d.water_valid, d.batt_v, d.next_min], [false, null, null]);
 });
-test("status 0x01 (convention LSB) -> avertissement", () => {
-  assert.ok(decode("000304D89E009D0100000000").warnings.some((w) => w.includes("bits inconnus")));
+test("status 0x00 -> pas d'alerte", () => {
+  assert.strictEqual(decode("0003002DA0009E001E000000").data.alert, false);
 });
-
-// --- 3. Extension S4, octets 8-11 (proposition, non validée par Brest) --------
-console.log("Extension S4 (proposition)");
-test("vigilance, pas 5 min, montée", () => {
-  const d = decode("000305DC9E00C8001503070C").data;
-  assert.strictEqual(d.format_version, 1);
-  assert.strictEqual(d.step_min, 5);
-  assert.deepStrictEqual(d.measurements.map((m) => [m.offset_min, m.water_mm]),
-    [[0, 1500], [-5, 1470], [-10, 1430], [-15, 1380]]);
+test("status 0x80 (ancienne convention MSB) -> pas d'alerte + avertissement", () => {
+  const res = decode("0003002DA0009E801E000000");
+  assert.strictEqual(res.data.alert, false);
+  assert.ok(res.warnings.some((w) => w.includes("bits 1 à 7")));
 });
-test("veille, pas 15 min, décrue (écarts négatifs)", () => {
-  const d = decode("000303849E00C9001FFEFBF7").data;
-  assert.deepStrictEqual(d.measurements.map((m) => [m.offset_min, m.water_mm]),
-    [[0, 900], [-15, 920], [-30, 950], [-45, 990]]);
-});
-test("mesures datées à rebours de l'heure de réception", () => {
-  const d = decode("000305DC9E00C8001503070C", { recvTime: new Date("2026-11-02T10:00:00Z") }).data;
-  assert.deepStrictEqual(d.measurements.map((m) => m.time), [
-    "2026-11-02T10:00:00.000Z", "2026-11-02T09:55:00.000Z",
-    "2026-11-02T09:50:00.000Z", "2026-11-02T09:45:00.000Z",
-  ]);
+test("octets réservés 9-11 non nuls -> ignorés", () => {
+  const res = decode("0003002DA0009E001EABCDEF");
+  assert.deepStrictEqual(res.warnings, []);
+  assert.strictEqual(res.data.water_mm, 45);
 });
 
-// --- 4. Trames invalides ------------------------------------------------------
-console.log("Trames invalides");
+// --- 3. Trames rejetées ou suspectes -------------------------------------------
+console.log("Trames rejetées ou suspectes");
 test("trame de 4 octets -> erreur", () => {
-  assert.ok(decode("000304D8").errors[0].includes("taille de trame invalide"));
+  assert.ok(decode("00030136").errors[0].includes("taille de trame invalide"));
 });
-test("node_id = 0 -> avertissement", () => {
-  assert.ok(decode("000004D89E009D0000000000").warnings.some((w) => w.includes("node_id = 0")));
+test("node_id = 0 -> trame rejetée (règle 1)", () => {
+  assert.ok(decode("0000013682009D0105000000").errors[0].includes("node_id = 0"));
+});
+test("next_min = 0 -> avertissement", () => {
+  assert.ok(decode("0003002DA0009E0000000000").warnings.some((w) => w.includes("next_min = 0")));
 });
 
 console.log(`\n${passed} réussi(s), ${failed} échec(s)`);

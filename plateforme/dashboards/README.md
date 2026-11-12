@@ -7,7 +7,15 @@ Les deux vues, faites avec **Node-RED Dashboard 2.0** (`@flowfuse/node-red-dashb
 | Vue | Adresse | Pour qui | Contenu |
 |---|---|---|---|
 | **AL5 – Vue simple** | `/dashboard/simple` | la mairie, sur téléphone | une carte par capteur : le **palier** en couleur (vert, jaune, orange, rouge), l'échelle des 4 paliers avec le palier courant en surbrillance, la hauteur courante en cm, la tendance, l'action à mener, l'heure de la dernière trame |
-| **AL6 – Vue technique** | `/dashboard/technique` | l'équipe, l'expert | la courbe de la hauteur dans le temps avec les seuils des paliers ; la courbe de la batterie ; l'état de chaque capteur (palier, dernière trame, prochaine attendue, bit d'alerte, batterie, signal, seq) ; l'état du récepteur ; les compteurs de trames perdues, doublons et rejets ; les 10 derniers événements |
+| **AL6 – Vue technique** | `/dashboard/technique` | l'équipe, l'expert | la courbe de la hauteur dans le temps avec les seuils des paliers ; la courbe de la batterie ; l'état de chaque capteur (palier, dernière trame, prochaine attendue, bit d'alerte, batterie, signal, seq, trames perdues, taux de réception) ; l'état du récepteur ; les compteurs de trames perdues, doublons et rejets ; les 10 derniers événements |
+
+## Règles des courbes et des dates
+
+- **Trames perdues** (seq qui saute) : la courbe est **coupée** à cet endroit. On ne trace pas de ligne entre deux mesures séparées par des trames jamais reçues, ce qui reviendrait à inventer des valeurs.
+- **Mesure invalide** (0xFFFF) : même chose, la courbe du niveau est coupée à cet instant.
+- **Capteur muet** : la courbe s'arrête à la dernière mesure.
+- **Dates** : chaque mesure est datée à sa réception (règle 4 du contrat). Les heures sont envoyées en UTC et affichées dans le **fuseau de l'appareil qui consulte** : heure de Paris pour l'équipe, heure de Thiès sur place. Les textes et les courbes montrent donc toujours la même heure. L'axe des courbes indique le jour et l'heure (`12/11 08:30`), utile sur plusieurs jours.
+- **Taux de réception** par capteur = trames reçues / (reçues + perdues).
 
 ## D'où vient le palier
 
@@ -36,7 +44,7 @@ Les seuils peuvent être réglés capteur par capteur avec `SEUILS_PAR_SITE`.
 
 ## Limites
 
-- **L'historique n'est pas encore durable** : les courbes gardent 7 jours en mémoire, mais s'effacent au redémarrage de Node-RED. Le stockage (S3) les rechargera depuis la base.
+- **Historique** : les courbes gardent 7 jours. Si le flux S3 est importé, les mesures **et** les événements des 7 derniers jours sont **rechargés depuis la base au démarrage** de Node-RED (courbes, compteurs, taux de réception). Sans S3, tout s'efface au redémarrage.
 - Les courbes relient les points dans leur ordre d'arrivée. Si l'on rejoue deux scénarios sur le même capteur, leurs heures simulées se chevauchent. Pour l'éviter, utiliser un `--node-id` différent par scénario, ou cliquer sur *Réinitialiser l'affichage* dans l'éditeur.
 
 ## Installation

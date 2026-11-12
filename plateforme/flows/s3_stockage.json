@@ -1,0 +1,543 @@
+[
+  {
+    "id": "c1d2e3f4a5b60001",
+    "type": "tab",
+    "label": "S3 – Stockage de l'historique",
+    "disabled": false,
+    "info": "Tâche S3 (B1). Enregistre pce92/mesures/+ et pce92/evenements dans SQLite, recharge les 7 derniers jours au démarrage et expose GET /pce92/mesures.\nVoir plateforme/flows/README.md."
+  },
+  {
+    "id": "c1d2e3f4a5b60002",
+    "type": "sqlitedb",
+    "db": "C:/Users/user/.node-red/pce92.db",
+    "mode": "RWC"
+  },
+  {
+    "id": "c1d2e3f4a5b60009",
+    "type": "comment",
+    "z": "c1d2e3f4a5b60001",
+    "name": "À ADAPTER : chemin du fichier de base (double-clic sur un nœud sqlite, puis le crayon)",
+    "info": "Windows : C:/Users/<nom>/.node-red/pce92.db\nRaspberry Pi : /home/<nom>/.node-red/pce92.db",
+    "x": 330,
+    "y": 40,
+    "wires": []
+  },
+  {
+    "id": "c1d2e3f4a5b60010",
+    "type": "comment",
+    "z": "c1d2e3f4a5b60001",
+    "name": "1. Au démarrage : créer les tables, puis recharger 7 jours dans les tableaux de bord",
+    "info": "",
+    "x": 340,
+    "y": 90,
+    "wires": []
+  },
+  {
+    "id": "c1d2e3f4a5b60011",
+    "type": "inject",
+    "z": "c1d2e3f4a5b60001",
+    "name": "Démarrage",
+    "props": [],
+    "repeat": "",
+    "crontab": "",
+    "once": true,
+    "onceDelay": "2",
+    "topic": "",
+    "x": 120,
+    "y": 140,
+    "wires": [
+      [
+        "c1d2e3f4a5b60012"
+      ]
+    ]
+  },
+  {
+    "id": "c1d2e3f4a5b60012",
+    "type": "function",
+    "z": "c1d2e3f4a5b60001",
+    "name": "Schéma (CREATE TABLE)",
+    "func": "// Crée les tables au démarrage (sans rien effacer si elles existent déjà).\nmsg.topic = `-- S3 : schéma de la base (créé au démarrage s'il n'existe pas)\nPRAGMA journal_mode = WAL;\nCREATE TABLE IF NOT EXISTS mesures (\n    id          INTEGER PRIMARY KEY AUTOINCREMENT,\n    node_id     INTEGER NOT NULL,\n    received_at TEXT    NOT NULL,   -- heure de réception, ISO 8601 UTC (règle 4)\n    water_mm    INTEGER,            -- NULL = mesure invalide (0xFFFF)\n    water_valid INTEGER NOT NULL,   -- 1 / 0\n    batt_v      REAL,               -- NULL = inconnue (0xFF)\n    seq         INTEGER NOT NULL,\n    alert       INTEGER NOT NULL,   -- bit d'alerte du nœud (1 / 0)\n    next_min    INTEGER,            -- NULL = inconnu (0xFF)\n    lost_before INTEGER NOT NULL DEFAULT 0,\n    rssi        INTEGER,\n    snr         REAL,\n    source      TEXT,\n    payload_hex TEXT,\n    UNIQUE (node_id, received_at, seq)\n);\nCREATE INDEX IF NOT EXISTS idx_mesures_capteur_heure ON mesures (node_id, received_at);\nCREATE TABLE IF NOT EXISTS evenements (\n    id          INTEGER PRIMARY KEY AUTOINCREMENT,\n    received_at TEXT NOT NULL,\n    type        TEXT NOT NULL,      -- trames_perdues, doublon, rejet, retour_seq\n    node_id     INTEGER,\n    seq         INTEGER,\n    details     TEXT                -- le message complet, en JSON\n);\nCREATE INDEX IF NOT EXISTS idx_evenements_heure ON evenements (received_at);`;\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 300,
+    "y": 140,
+    "wires": [
+      [
+        "c1d2e3f4a5b60013"
+      ]
+    ]
+  },
+  {
+    "id": "c1d2e3f4a5b60013",
+    "type": "sqlite",
+    "z": "c1d2e3f4a5b60001",
+    "mydb": "c1d2e3f4a5b60002",
+    "sqlquery": "batch",
+    "sql": "",
+    "name": "Créer les tables",
+    "x": 490,
+    "y": 140,
+    "wires": [
+      [
+        "c1d2e3f4a5b60014",
+        "c1d2e3f4a5b60018"
+      ]
+    ]
+  },
+  {
+    "id": "c1d2e3f4a5b60018",
+    "type": "function",
+    "z": "c1d2e3f4a5b60001",
+    "name": "Paramètres événements",
+    "func": "// Événements des 7 derniers jours (pour les compteurs et la liste de la vue technique).\nmsg.params = { $depuis: new Date(Date.now() - 7 * 86400000).toISOString() };\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 690,
+    "y": 190,
+    "wires": [
+      [
+        "c1d2e3f4a5b60019"
+      ]
+    ]
+  },
+  {
+    "id": "c1d2e3f4a5b60019",
+    "type": "sqlite",
+    "z": "c1d2e3f4a5b60001",
+    "mydb": "c1d2e3f4a5b60002",
+    "sqlquery": "prepared",
+    "sql": "SELECT received_at, details FROM evenements WHERE received_at >= $depuis ORDER BY received_at;",
+    "name": "Lire les événements",
+    "x": 880,
+    "y": 190,
+    "wires": [
+      [
+        "c1d2e3f4a5b6001a"
+      ]
+    ]
+  },
+  {
+    "id": "c1d2e3f4a5b6001a",
+    "type": "function",
+    "z": "c1d2e3f4a5b60001",
+    "name": "Rejouer les événements",
+    "func": "// Renvoie les événements enregistrés vers les tableaux de bord, comme s'ils venaient de S2.\nconst messages = (msg.payload || []).map(l => {\n    let e = {};\n    try { e = JSON.parse(l.details); } catch (err) { e = { type: \"inconnu\" }; }\n    if (!e.received_at) e.received_at = l.received_at;\n    return { topic: \"pce92/evenements\", replay: true, payload: e };\n});\nnode.status({ fill: \"blue\", shape: \"dot\", text: messages.length + \" événement(s) rechargé(s)\" });\nreturn [messages];",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 1080,
+    "y": 190,
+    "wires": [
+      [
+        "c1d2e3f4a5b60017"
+      ]
+    ]
+  },
+  {
+    "id": "c1d2e3f4a5b60014",
+    "type": "function",
+    "z": "c1d2e3f4a5b60001",
+    "name": "Paramètres 7 jours",
+    "func": "// Requête « 7 derniers jours ». msg.node_id = un capteur précis, ou absent = tous les capteurs.\n// msg.jours = nombre de jours (7 par défaut).\nconst jours = Number(msg.jours) > 0 ? Number(msg.jours) : 7;\nmsg.params = {\n    $depuis: new Date(Date.now() - jours * 86400000).toISOString(),\n    $node_id: (msg.node_id === undefined || msg.node_id === null || msg.node_id === \"\") ? null : Number(msg.node_id)\n};\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 680,
+    "y": 140,
+    "wires": [
+      [
+        "c1d2e3f4a5b60015"
+      ]
+    ]
+  },
+  {
+    "id": "c1d2e3f4a5b60015",
+    "type": "sqlite",
+    "z": "c1d2e3f4a5b60001",
+    "mydb": "c1d2e3f4a5b60002",
+    "sqlquery": "prepared",
+    "sql": "SELECT node_id, received_at, water_mm, water_valid, batt_v, seq, alert, next_min,\n       lost_before, rssi, snr, source, payload_hex\nFROM mesures\nWHERE received_at >= $depuis\n  AND ($node_id IS NULL OR node_id = $node_id)\nORDER BY received_at;",
+    "name": "Lire 7 jours",
+    "x": 860,
+    "y": 140,
+    "wires": [
+      [
+        "c1d2e3f4a5b60016"
+      ]
+    ]
+  },
+  {
+    "id": "c1d2e3f4a5b60016",
+    "type": "function",
+    "z": "c1d2e3f4a5b60001",
+    "name": "Rejouer vers les tableaux de bord",
+    "func": "// Au démarrage : renvoie l'historique des 7 derniers jours vers les tableaux de bord,\n// sous la même forme que les mesures publiées par S2, marqué replay = true.\nconst lignes = msg.payload || [];\nconst messages = lignes.map(l => ({\n    topic: \"pce92/mesures/\" + l.node_id,\n    replay: true,\n    payload: {\n        node_id: l.node_id, received_at: l.received_at,\n        water_mm: l.water_mm, water_valid: l.water_valid === 1,\n        batt_v: l.batt_v, seq: l.seq, alert: l.alert === 1, next_min: l.next_min,\n        expected_next_at: l.next_min === null ? null\n            : new Date(Date.parse(l.received_at) + l.next_min * 60000).toISOString(),\n        lost_before: l.lost_before, rssi: l.rssi, snr: l.snr, source: l.source, payload_hex: l.payload_hex\n    }\n}));\nnode.status({ fill: \"blue\", shape: \"dot\", text: messages.length + \" mesure(s) rechargée(s)\" });\nreturn [messages];",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 1080,
+    "y": 140,
+    "wires": [
+      [
+        "c1d2e3f4a5b60017"
+      ]
+    ]
+  },
+  {
+    "id": "c1d2e3f4a5b60017",
+    "type": "link out",
+    "z": "c1d2e3f4a5b60001",
+    "name": "Historique → AL5/AL6",
+    "mode": "link",
+    "links": [
+      "b1c2d3e4f5a60018"
+    ],
+    "x": 1275,
+    "y": 140,
+    "wires": []
+  },
+  {
+    "id": "c1d2e3f4a5b60020",
+    "type": "comment",
+    "z": "c1d2e3f4a5b60001",
+    "name": "2. Enregistrer chaque mesure et chaque événement publiés par S2",
+    "info": "",
+    "x": 280,
+    "y": 250,
+    "wires": []
+  },
+  {
+    "id": "c1d2e3f4a5b60021",
+    "type": "mqtt in",
+    "z": "c1d2e3f4a5b60001",
+    "name": "Mesures (S2)",
+    "topic": "pce92/mesures/+",
+    "qos": "1",
+    "datatype": "json",
+    "broker": "a1b2c3d4e5f60002",
+    "nl": false,
+    "rap": true,
+    "rh": 0,
+    "inputs": 0,
+    "x": 130,
+    "y": 300,
+    "wires": [
+      [
+        "c1d2e3f4a5b60022"
+      ]
+    ]
+  },
+  {
+    "id": "c1d2e3f4a5b60022",
+    "type": "function",
+    "z": "c1d2e3f4a5b60001",
+    "name": "Préparer la mesure",
+    "func": "// Prépare l'enregistrement d'une mesure (topic pce92/mesures/<node_id>, publié par S2).\nconst m = msg.payload;\nif (!m || typeof m.node_id !== \"number\" || !m.received_at) {\n    node.warn(\"Mesure ignorée : format inattendu\");\n    return null;\n}\nconst b = (v) => (v ? 1 : 0);\nmsg.params = {\n    $node_id: m.node_id,\n    $received_at: new Date(m.received_at).toISOString(),   // format unique, pour trier et filtrer\n    $water_mm: m.water_valid ? m.water_mm : null,\n    $water_valid: b(m.water_valid),\n    $batt_v: m.batt_v ?? null,\n    $seq: m.seq,\n    $alert: b(m.alert),\n    $next_min: m.next_min ?? null,\n    $lost_before: m.lost_before || 0,\n    $rssi: m.rssi ?? null,\n    $snr: m.snr ?? null,\n    $source: m.source ?? null,\n    $payload_hex: m.payload_hex ?? null\n};\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 330,
+    "y": 300,
+    "wires": [
+      [
+        "c1d2e3f4a5b60023"
+      ]
+    ]
+  },
+  {
+    "id": "c1d2e3f4a5b60023",
+    "type": "sqlite",
+    "z": "c1d2e3f4a5b60001",
+    "mydb": "c1d2e3f4a5b60002",
+    "sqlquery": "prepared",
+    "sql": "INSERT OR IGNORE INTO mesures\n (node_id, received_at, water_mm, water_valid, batt_v, seq, alert, next_min, lost_before, rssi, snr, source, payload_hex)\nVALUES\n ($node_id, $received_at, $water_mm, $water_valid, $batt_v, $seq, $alert, $next_min, $lost_before, $rssi, $snr, $source, $payload_hex);",
+    "name": "INSERT mesures",
+    "x": 530,
+    "y": 300,
+    "wires": [
+      []
+    ]
+  },
+  {
+    "id": "c1d2e3f4a5b60024",
+    "type": "mqtt in",
+    "z": "c1d2e3f4a5b60001",
+    "name": "Événements (S2)",
+    "topic": "pce92/evenements",
+    "qos": "1",
+    "datatype": "json",
+    "broker": "a1b2c3d4e5f60002",
+    "nl": false,
+    "rap": true,
+    "rh": 0,
+    "inputs": 0,
+    "x": 140,
+    "y": 360,
+    "wires": [
+      [
+        "c1d2e3f4a5b60025"
+      ]
+    ]
+  },
+  {
+    "id": "c1d2e3f4a5b60025",
+    "type": "function",
+    "z": "c1d2e3f4a5b60001",
+    "name": "Préparer l'événement",
+    "func": "// Prépare l'enregistrement d'un événement (topic pce92/evenements, publié par S2).\nconst e = msg.payload || {};\nmsg.params = {\n    $received_at: new Date(e.received_at || Date.now()).toISOString(),\n    $type: e.type || \"inconnu\",\n    $node_id: e.node_id ?? null,\n    $seq: e.seq ?? null,\n    $details: JSON.stringify(e)\n};\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 340,
+    "y": 360,
+    "wires": [
+      [
+        "c1d2e3f4a5b60026"
+      ]
+    ]
+  },
+  {
+    "id": "c1d2e3f4a5b60026",
+    "type": "sqlite",
+    "z": "c1d2e3f4a5b60001",
+    "mydb": "c1d2e3f4a5b60002",
+    "sqlquery": "prepared",
+    "sql": "INSERT INTO evenements (received_at, type, node_id, seq, details)\nVALUES ($received_at, $type, $node_id, $seq, $details);",
+    "name": "INSERT evenements",
+    "x": 540,
+    "y": 360,
+    "wires": [
+      []
+    ]
+  },
+  {
+    "id": "c1d2e3f4a5b60030",
+    "type": "comment",
+    "z": "c1d2e3f4a5b60001",
+    "name": "3. Requête « 7 derniers jours » (cliquer sur le bouton, résultat dans le debug)",
+    "info": "",
+    "x": 320,
+    "y": 390,
+    "wires": []
+  },
+  {
+    "id": "c1d2e3f4a5b60031",
+    "type": "inject",
+    "z": "c1d2e3f4a5b60001",
+    "name": "7 jours – capteur 3",
+    "props": [
+      {
+        "p": "node_id",
+        "v": "3",
+        "vt": "num"
+      },
+      {
+        "p": "jours",
+        "v": "7",
+        "vt": "num"
+      }
+    ],
+    "repeat": "",
+    "crontab": "",
+    "once": false,
+    "onceDelay": "0.1",
+    "topic": "",
+    "x": 140,
+    "y": 440,
+    "wires": [
+      [
+        "c1d2e3f4a5b60032"
+      ]
+    ]
+  },
+  {
+    "id": "c1d2e3f4a5b60032",
+    "type": "function",
+    "z": "c1d2e3f4a5b60001",
+    "name": "Paramètres 7 jours",
+    "func": "// Requête « 7 derniers jours ». msg.node_id = un capteur précis, ou absent = tous les capteurs.\n// msg.jours = nombre de jours (7 par défaut).\nconst jours = Number(msg.jours) > 0 ? Number(msg.jours) : 7;\nmsg.params = {\n    $depuis: new Date(Date.now() - jours * 86400000).toISOString(),\n    $node_id: (msg.node_id === undefined || msg.node_id === null || msg.node_id === \"\") ? null : Number(msg.node_id)\n};\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 340,
+    "y": 440,
+    "wires": [
+      [
+        "c1d2e3f4a5b60033"
+      ]
+    ]
+  },
+  {
+    "id": "c1d2e3f4a5b60033",
+    "type": "sqlite",
+    "z": "c1d2e3f4a5b60001",
+    "mydb": "c1d2e3f4a5b60002",
+    "sqlquery": "prepared",
+    "sql": "SELECT node_id, received_at, water_mm, water_valid, batt_v, seq, alert, next_min,\n       lost_before, rssi, snr, source, payload_hex\nFROM mesures\nWHERE received_at >= $depuis\n  AND ($node_id IS NULL OR node_id = $node_id)\nORDER BY received_at;",
+    "name": "Lire 7 jours",
+    "x": 520,
+    "y": 440,
+    "wires": [
+      [
+        "c1d2e3f4a5b60034"
+      ]
+    ]
+  },
+  {
+    "id": "c1d2e3f4a5b60034",
+    "type": "function",
+    "z": "c1d2e3f4a5b60001",
+    "name": "Résumé",
+    "func": "// Résume le résultat de la requête dans le panneau debug.\nconst lignes = msg.payload || [];\nconst parCapteur = {};\nfor (const l of lignes) parCapteur[l.node_id] = (parCapteur[l.node_id] || 0) + 1;\nnode.status({ fill: \"green\", shape: \"dot\", text: lignes.length + \" mesure(s) sur 7 jours\" });\nmsg.resume = { total: lignes.length, par_capteur: parCapteur,\n               premiere: lignes.length ? lignes[0].received_at : null,\n               derniere: lignes.length ? lignes[lignes.length - 1].received_at : null };\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 680,
+    "y": 440,
+    "wires": [
+      [
+        "c1d2e3f4a5b60035"
+      ]
+    ]
+  },
+  {
+    "id": "c1d2e3f4a5b60035",
+    "type": "debug",
+    "z": "c1d2e3f4a5b60001",
+    "name": "Résultat 7 jours",
+    "active": true,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "resume",
+    "targetType": "msg",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 860,
+    "y": 440,
+    "wires": []
+  },
+  {
+    "id": "c1d2e3f4a5b60040",
+    "type": "comment",
+    "z": "c1d2e3f4a5b60001",
+    "name": "4. API : GET /pce92/mesures?node_id=3&jours=7&format=csv",
+    "info": "",
+    "x": 270,
+    "y": 510,
+    "wires": []
+  },
+  {
+    "id": "c1d2e3f4a5b60041",
+    "type": "http in",
+    "z": "c1d2e3f4a5b60001",
+    "name": "GET /pce92/mesures",
+    "url": "/pce92/mesures",
+    "method": "get",
+    "upload": false,
+    "swaggerDoc": "",
+    "x": 150,
+    "y": 560,
+    "wires": [
+      [
+        "c1d2e3f4a5b60042"
+      ]
+    ]
+  },
+  {
+    "id": "c1d2e3f4a5b60042",
+    "type": "function",
+    "z": "c1d2e3f4a5b60001",
+    "name": "Lire les paramètres",
+    "func": "// GET /pce92/mesures?node_id=3&jours=7&format=csv\nconst q = msg.req.query || {};\nconst jours = Math.min(Math.max(Number(q.jours) || 7, 1), 366);\nmsg.format = q.format === \"csv\" ? \"csv\" : \"json\";\nmsg.params = {\n    $depuis: new Date(Date.now() - jours * 86400000).toISOString(),\n    $node_id: q.node_id ? Number(q.node_id) : null\n};\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 360,
+    "y": 560,
+    "wires": [
+      [
+        "c1d2e3f4a5b60043"
+      ]
+    ]
+  },
+  {
+    "id": "c1d2e3f4a5b60043",
+    "type": "sqlite",
+    "z": "c1d2e3f4a5b60001",
+    "mydb": "c1d2e3f4a5b60002",
+    "sqlquery": "prepared",
+    "sql": "SELECT node_id, received_at, water_mm, water_valid, batt_v, seq, alert, next_min,\n       lost_before, rssi, snr, source, payload_hex\nFROM mesures\nWHERE received_at >= $depuis\n  AND ($node_id IS NULL OR node_id = $node_id)\nORDER BY received_at;",
+    "name": "Lire les mesures",
+    "x": 550,
+    "y": 560,
+    "wires": [
+      [
+        "c1d2e3f4a5b60044"
+      ]
+    ]
+  },
+  {
+    "id": "c1d2e3f4a5b60044",
+    "type": "function",
+    "z": "c1d2e3f4a5b60001",
+    "name": "JSON ou CSV",
+    "func": "// Met en forme la réponse : JSON (par défaut) ou CSV (export, par ex. pour OPALimpact).\nconst lignes = (msg.payload || []).map(l => Object.assign({}, l,\n    { water_valid: l.water_valid === 1, alert: l.alert === 1 }));\nif (msg.format === \"csv\") {\n    const colonnes = [\"node_id\", \"received_at\", \"water_mm\", \"water_valid\", \"batt_v\", \"seq\", \"alert\",\n                      \"next_min\", \"lost_before\", \"rssi\", \"snr\", \"source\", \"payload_hex\"];\n    const csv = [colonnes.join(\",\")].concat(\n        lignes.map(l => colonnes.map(c => (l[c] === null || l[c] === undefined) ? \"\" : l[c]).join(\",\"))\n    ).join(\"\\n\");\n    msg.payload = csv;\n    msg.headers = { \"Content-Type\": \"text/csv; charset=utf-8\",\n                    \"Content-Disposition\": \"attachment; filename=pce92_mesures.csv\" };\n} else {\n    msg.payload = lignes;\n    msg.headers = { \"Content-Type\": \"application/json; charset=utf-8\" };\n}\nmsg.statusCode = 200;\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 730,
+    "y": 560,
+    "wires": [
+      [
+        "c1d2e3f4a5b60045"
+      ]
+    ]
+  },
+  {
+    "id": "c1d2e3f4a5b60045",
+    "type": "http response",
+    "z": "c1d2e3f4a5b60001",
+    "name": "Réponse",
+    "statusCode": "",
+    "headers": {},
+    "x": 890,
+    "y": 560,
+    "wires": []
+  }
+]

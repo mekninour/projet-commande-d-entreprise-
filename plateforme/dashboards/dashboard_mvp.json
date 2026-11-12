@@ -1,0 +1,529 @@
+[
+  {
+    "id": "b1c2d3e4f5a60001",
+    "type": "tab",
+    "label": "AL5 / AL6 – Tableaux de bord",
+    "disabled": false,
+    "info": "MVP des tableaux de bord (B1). Lit pce92/mesures/+ et pce92/evenements (S2), et pce92/alertes/+ (moteur de B2, AL2).\nVue simple : /dashboard/simple · Vue technique : /dashboard/technique.\nVoir plateforme/dashboards/README.md."
+  },
+  {
+    "id": "b1c2d3e4f5a60002",
+    "type": "ui-base",
+    "name": "PCE 92 – Surveillance des crues",
+    "path": "/dashboard",
+    "appIcon": "",
+    "includeClientData": true,
+    "acceptsClientConfig": [
+      "ui-notification",
+      "ui-control"
+    ],
+    "showPathInSidebar": false,
+    "headerContent": "page",
+    "navigationStyle": "default",
+    "titleBarStyle": "default",
+    "showReconnectNotification": true,
+    "notificationDisplayTime": 1,
+    "showDisconnectNotification": true,
+    "allowInstall": false
+  },
+  {
+    "id": "b1c2d3e4f5a60003",
+    "type": "ui-theme",
+    "name": "Thème PCE 92",
+    "colors": {
+      "surface": "#1f3a5f",
+      "primary": "#1f3a5f",
+      "bgPage": "#f4f6f8",
+      "groupBg": "#ffffff",
+      "groupOutline": "#d9d9e0"
+    },
+    "sizes": {
+      "density": "default",
+      "pagePadding": "12px",
+      "groupGap": "12px",
+      "groupBorderRadius": "8px",
+      "widgetGap": "12px"
+    }
+  },
+  {
+    "id": "b1c2d3e4f5a60004",
+    "type": "ui-page",
+    "name": "Vue simple",
+    "ui": "b1c2d3e4f5a60002",
+    "path": "/simple",
+    "icon": "home",
+    "layout": "grid",
+    "theme": "b1c2d3e4f5a60003",
+    "breakpoints": [
+      {
+        "name": "Default",
+        "px": "0",
+        "cols": "3"
+      },
+      {
+        "name": "Tablet",
+        "px": "576",
+        "cols": "6"
+      },
+      {
+        "name": "Small Desktop",
+        "px": "768",
+        "cols": "9"
+      },
+      {
+        "name": "Desktop",
+        "px": "1024",
+        "cols": "12"
+      }
+    ],
+    "order": 1,
+    "className": "",
+    "visible": "true",
+    "disabled": "false"
+  },
+  {
+    "id": "b1c2d3e4f5a60005",
+    "type": "ui-page",
+    "name": "Vue technique",
+    "ui": "b1c2d3e4f5a60002",
+    "path": "/technique",
+    "icon": "chart-line",
+    "layout": "grid",
+    "theme": "b1c2d3e4f5a60003",
+    "breakpoints": [
+      {
+        "name": "Default",
+        "px": "0",
+        "cols": "3"
+      },
+      {
+        "name": "Tablet",
+        "px": "576",
+        "cols": "6"
+      },
+      {
+        "name": "Small Desktop",
+        "px": "768",
+        "cols": "9"
+      },
+      {
+        "name": "Desktop",
+        "px": "1024",
+        "cols": "12"
+      }
+    ],
+    "order": 2,
+    "className": "",
+    "visible": "true",
+    "disabled": "false"
+  },
+  {
+    "id": "b1c2d3e4f5a60006",
+    "type": "ui-group",
+    "name": "État des sites",
+    "page": "b1c2d3e4f5a60004",
+    "width": "6",
+    "height": "1",
+    "order": 1,
+    "showTitle": true,
+    "className": "",
+    "visible": "true",
+    "disabled": "false",
+    "groupType": "default"
+  },
+  {
+    "id": "b1c2d3e4f5a60007",
+    "type": "ui-group",
+    "name": "Courbes",
+    "page": "b1c2d3e4f5a60005",
+    "width": "12",
+    "height": "1",
+    "order": 1,
+    "showTitle": true,
+    "className": "",
+    "visible": "true",
+    "disabled": "false",
+    "groupType": "default"
+  },
+  {
+    "id": "b1c2d3e4f5a60008",
+    "type": "ui-group",
+    "name": "Capteurs et réception",
+    "page": "b1c2d3e4f5a60005",
+    "width": "12",
+    "height": "1",
+    "order": 2,
+    "showTitle": true,
+    "className": "",
+    "visible": "true",
+    "disabled": "false",
+    "groupType": "default"
+  },
+  {
+    "id": "b1c2d3e4f5a60010",
+    "type": "comment",
+    "z": "b1c2d3e4f5a60001",
+    "name": "AL5 / AL6 : tableaux de bord temps réel (historique rechargé par S3 au démarrage)",
+    "info": "",
+    "x": 250,
+    "y": 40,
+    "wires": []
+  },
+  {
+    "id": "b1c2d3e4f5a60011",
+    "type": "mqtt in",
+    "z": "b1c2d3e4f5a60001",
+    "name": "Mesures (S2)",
+    "topic": "pce92/mesures/+",
+    "qos": "1",
+    "datatype": "json",
+    "broker": "a1b2c3d4e5f60002",
+    "nl": false,
+    "rap": true,
+    "rh": 0,
+    "inputs": 0,
+    "x": 130,
+    "y": 100,
+    "wires": [
+      [
+        "b1c2d3e4f5a60014"
+      ]
+    ]
+  },
+  {
+    "id": "b1c2d3e4f5a60012",
+    "type": "mqtt in",
+    "z": "b1c2d3e4f5a60001",
+    "name": "Événements (S2)",
+    "topic": "pce92/evenements",
+    "qos": "1",
+    "datatype": "json",
+    "broker": "a1b2c3d4e5f60002",
+    "nl": false,
+    "rap": true,
+    "rh": 0,
+    "inputs": 0,
+    "x": 140,
+    "y": 160,
+    "wires": [
+      [
+        "b1c2d3e4f5a60014"
+      ]
+    ]
+  },
+  {
+    "id": "b1c2d3e4f5a60017",
+    "type": "mqtt in",
+    "z": "b1c2d3e4f5a60001",
+    "name": "Paliers du moteur d'alerte (AL2)",
+    "topic": "pce92/alertes/+",
+    "qos": "1",
+    "datatype": "json",
+    "broker": "a1b2c3d4e5f60002",
+    "nl": false,
+    "rap": true,
+    "rh": 0,
+    "inputs": 0,
+    "x": 170,
+    "y": 260,
+    "wires": [
+      [
+        "b1c2d3e4f5a60014"
+      ]
+    ]
+  },
+  {
+    "id": "b1c2d3e4f5a60018",
+    "type": "link in",
+    "z": "b1c2d3e4f5a60001",
+    "name": "Historique (S3)",
+    "links": [
+      "c1d2e3f4a5b60017"
+    ],
+    "x": 145,
+    "y": 300,
+    "wires": [
+      [
+        "b1c2d3e4f5a60014"
+      ]
+    ]
+  },
+  {
+    "id": "b1c2d3e4f5a60013",
+    "type": "inject",
+    "z": "b1c2d3e4f5a60001",
+    "name": "Tic 30 s",
+    "props": [
+      {
+        "p": "topic",
+        "vt": "str"
+      }
+    ],
+    "repeat": "30",
+    "crontab": "",
+    "once": true,
+    "onceDelay": "1",
+    "topic": "tic",
+    "x": 130,
+    "y": 220,
+    "wires": [
+      [
+        "b1c2d3e4f5a60014"
+      ]
+    ]
+  },
+  {
+    "id": "b1c2d3e4f5a60014",
+    "type": "function",
+    "z": "b1c2d3e4f5a60001",
+    "name": "Préparer l'affichage",
+    "func": "// AL5 / AL6 – Préparer l'affichage à partir des mesures (S2), des alertes (AL2) et des événements.\n// Entrées : pce92/mesures/<node_id>, pce92/alertes/<node_id> (moteur de B2, quand il sera prêt),\n//           pce92/evenements, et un « tic » toutes les 30 s.\n// Sorties : 1. vue simple (AL5)  2. vue technique (AL6)  3. courbe du niveau  4. courbe de la batterie\n// Les dates sont envoyées en ISO (UTC) et mises en forme dans le navigateur : les textes et les courbes\n// affichent ainsi la même heure, celle de l'appareil qui consulte (Paris pour l'équipe, Thiès sur place).\n\n// --- Réglages provisoires (à remplacer par le fichier de seuils et de sites de B2, AL1) ---\nconst SITES = { 3: \"Site de test (nœud 3)\" };\n// Seuils des paliers, en mm au-dessus du sol. Par défaut : jaune = marge critique du contrat (100 mm),\n// rouge = repère de danger du contrat (300 mm), orange = valeur intermédiaire PROVISOIRE.\nconst SEUILS_DEFAUT = { jaune: 100, orange: 200, rouge: 300 };\nconst SEUILS_PAR_SITE = {};      // ex. { 3: { jaune: 120, orange: 250, rouge: 400 } }\nconst TENDANCE_MM = 20;          // écart minimal pour parler de hausse ou de baisse\nconst BATT_FAIBLE_V = 3.2;       // contrat v1.2, périmètre V2 : batterie faible sous 3,20 V\n// Libellés et actions par palier (repris du L1, partie 4.1.2), à faire valider par le client.\nconst PALIERS = {\n    vert:   { rang: 0, libelle: \"NORMAL\",            action: \"Surveillance : aucune action.\" },\n    jaune:  { rang: 1, libelle: \"VIGILANCE JAUNE\",   action: \"Informer : suivre l'évolution du niveau.\" },\n    orange: { rang: 2, libelle: \"ALERTE ORANGE\",     action: \"Prévenir les zones à risque et pré-positionner les secours.\" },\n    rouge:  { rang: 3, libelle: \"ALERTE ROUGE\",      action: \"Évacuer les zones inondables. Appeler les secours.\" },\n    indisponible: { rang: -1, libelle: \"DONNÉES INDISPONIBLES\",\n                    action: \"Aucune mesure exploitable : la situation réelle est inconnue. Vérifier le capteur.\" }\n};\n// ------------------------------------------------------------------------------------------\n\nconst etats = flow.get(\"etats\") || {};          // dernier état connu par capteur\nconst alertes = flow.get(\"alertes\") || {};      // dernier palier reçu du moteur de B2, par capteur\nconst compteurs = flow.get(\"compteurs\") || { perdues: 0, doublons: 0, rejets: 0, retours_seq: 0 };\nlet evenements = flow.get(\"evenements\") || [];  // 10 derniers événements\nconst sorties = [null, null, null, null];\n\nfunction nomSite(id) { return SITES[id] || (\"Capteur n° \" + id); }\nfunction seuils(id) { return SEUILS_PAR_SITE[id] || SEUILS_DEFAUT; }\nfunction palierParHauteur(mm, s) {\n    if (mm >= s.rouge) return \"rouge\";\n    if (mm >= s.orange) return \"orange\";\n    if (mm >= s.jaune) return \"jaune\";\n    return \"vert\";\n}\n\n// 1. Une nouvelle mesure\nif (msg.topic && msg.topic.startsWith(\"pce92/mesures/\")) {\n    const m = msg.payload;\n    const e = etats[m.node_id] || { node_id: m.node_id };\n    if (m.water_valid) {\n        e.precedent_mm = e.dernier_valide ? e.dernier_valide.water_mm : null;\n        e.dernier_valide = m;\n    }\n    e.derniere = m;\n    // Heure d'arrivée dans Node-RED (sert à repérer un capteur muet). Pour l'historique\n    // rechargé depuis la base (S3), on reprend l'heure de réception d'origine.\n    e.arrivee = msg.replay ? Date.parse(m.received_at) : Date.now();\n    etats[m.node_id] = e;\n    const x = Date.parse(m.received_at);\n    const nom = nomSite(m.node_id);\n    const s = seuils(m.node_id);\n    const niveau = [];\n    const batterie = [];\n    // Trames perdues juste avant : on coupe la courbe (point vide au milieu du trou),\n    // pour ne pas tracer une ligne qui inventerait des mesures jamais reçues.\n    if (m.lost_before > 0) {\n        const xTrou = x - ((m.next_min || 30) * 60000) / 2;\n        niveau.push({ topic: nom, payload: { x: xTrou, y: null } });\n        batterie.push({ topic: nom, payload: { x: xTrou, y: null } });\n    }\n    // Les seuils d'abord (couleurs fixes : rouge, orange, jaune), puis la mesure.\n    niveau.unshift({ topic: \"Seuil rouge (\" + s.rouge + \" mm)\", payload: { x: x, y: s.rouge } },\n                   { topic: \"Seuil orange (\" + s.orange + \" mm)\", payload: { x: x, y: s.orange } },\n                   { topic: \"Seuil jaune (\" + s.jaune + \" mm)\", payload: { x: x, y: s.jaune } });\n    // Mesure invalide (0xFFFF) : point vide, la courbe est coupée à cet endroit.\n    niveau.push({ topic: nom, payload: { x: x, y: m.water_valid ? m.water_mm : null } });\n    batterie.push({ topic: nom, payload: { x: x, y: m.batt_v } });\n    sorties[2] = niveau;\n    sorties[3] = batterie;\n    e.perdues = (e.perdues || 0) + (m.lost_before || 0);\n    e.recues = (e.recues || 0) + 1;\n}\n\n// 2. Un palier calculé par le moteur d'alerte de B2 (AL2) : { node_id, palier, ... }\nif (msg.topic && msg.topic.startsWith(\"pce92/alertes/\")) {\n    const a = msg.payload || {};\n    if (PALIERS[a.palier] && a.palier !== \"indisponible\") {\n        alertes[a.node_id] = { palier: a.palier, recu_a: new Date().toISOString() };\n    }\n}\n\n// 3. Un événement (rejet, doublon, trames perdues, retour de seq)\nif (msg.topic === \"pce92/evenements\") {\n    const ev = msg.payload;\n    if (ev.type === \"doublon\") compteurs.doublons += 1;\n    if (ev.type === \"rejet\") compteurs.rejets += 1;\n    if (ev.type === \"retour_seq\") compteurs.retours_seq += 1;\n    const textes = {\n        trames_perdues: (ev.nombre + \" trame(s) perdue(s) avant la seq \" + ev.seq),\n        doublon: (\"doublon écarté (seq \" + ev.seq + \")\"),\n        rejet: (\"trame rejetée : \" + ev.raison),\n        retour_seq: (\"compteur revenu en arrière (\" + ev.seq_precedent + \" → \" + ev.seq + \")\")\n    };\n    evenements.unshift({ heure_iso: ev.received_at || new Date().toISOString(),\n                         capteur: ev.node_id ?? \"—\", texte: textes[ev.type] || ev.type });\n    evenements = evenements.slice(0, 10);\n}\n\nflow.set(\"etats\", etats);\nflow.set(\"alertes\", alertes);\nflow.set(\"compteurs\", compteurs);\nflow.set(\"evenements\", evenements);\n\n// 4. Recalculer les deux vues (à chaque message, y compris le tic de 30 s)\nconst sites = [], lignes = [];\nlet derniereReception = null;\nfor (const id of Object.keys(etats).sort((a, b) => a - b)) {\n    const e = etats[id];\n    const d = e.derniere;\n    const v = e.dernier_valide;\n    const periode = d.next_min || 60;\n    const marge = Math.max(5, periode / 2);                   // tolérance de retard, en minutes\n    // Capteur muet : aucune nouvelle trame n'est arrivée depuis next_min + marge.\n    const muet = Date.now() > (e.arrivee || Date.parse(d.received_at)) + (periode + marge) * 60000;\n\n    // Palier : moteur de B2 s'il a parlé, sinon calcul provisoire sur la hauteur + bit d'alerte du nœud.\n    let palier, source;\n    if (alertes[id]) {\n        palier = alertes[id].palier; source = \"moteur d'alerte\";\n    } else {\n        palier = v ? palierParHauteur(v.water_mm, seuils(id)) : \"vert\";\n        if (d.alert) palier = \"rouge\";                        // règle 3 : le bit d'alerte déclenche l'alerte\n        source = \"calcul provisoire\";\n    }\n    // Sans mesure exploitable, pas de verdict : jamais de vert pour un capteur muet.\n    const sansVerdict = muet || !d.water_valid;\n    if (sansVerdict) palier = \"indisponible\";\n\n    let tendance = \"\";\n    if (!sansVerdict && v && e.precedent_mm !== null && e.precedent_mm !== undefined) {\n        const diff = v.water_mm - e.precedent_mm;\n        tendance = diff >= TENDANCE_MM ? \"en hausse\" : (diff <= -TENDANCE_MM ? \"en baisse\" : \"stable\");\n    }\n\n    sites.push({\n        node_id: Number(id), nom: nomSite(id), palier: palier,\n        rang: PALIERS[palier].rang, libelle: PALIERS[palier].libelle, action: PALIERS[palier].action,\n        niveau: v ? Math.round(v.water_mm / 10) + \" cm\" : \"—\",\n        ancien: sansVerdict ? (v ? \"Dernier niveau connu : \" + Math.round(v.water_mm / 10) + \" cm\" : \"Aucun niveau connu\") : \"\",\n        ancien_iso: sansVerdict && v ? v.received_at : null,\n        tendance: tendance,\n        derniere_iso: d.received_at\n    });\n    lignes.push({\n        nom: nomSite(id), palier: PALIERS[palier].libelle, source: sansVerdict ? \"—\" : source,\n        etat: muet ? \"en retard\" : (d.water_valid ? \"à jour\" : \"mesure invalide\"),\n        derniere_iso: d.received_at,\n        prochaine_iso: d.expected_next_at,\n        perdues: e.perdues || 0,\n        reception: e.recues ? Math.round(100 * e.recues / (e.recues + (e.perdues || 0))) + \" %\" : \"—\",\n        niveau: d.water_valid ? d.water_mm + \" mm\" : \"invalide\",\n        bit: d.alert ? \"levé\" : \"non\",\n        batterie: d.batt_v === null ? \"inconnue\" : d.batt_v.toFixed(2) + \" V\" + (d.batt_v < BATT_FAIBLE_V ? \" (faible)\" : \"\"),\n        batt_faible: d.batt_v !== null && d.batt_v < BATT_FAIBLE_V,\n        signal: (d.rssi ?? \"—\") + \" dBm / \" + (d.snr ?? \"—\") + \" dB\",\n        seq: d.seq\n    });\n    if (!derniereReception || d.received_at > derniereReception) derniereReception = d.received_at;\n}\n\n// Total des trames perdues = somme par capteur (recalculée aussi après un redémarrage, grâce à S3).\ncompteurs.perdues = Object.values(etats).reduce((t, e) => t + (e.perdues || 0), 0);\nsorties[0] = { payload: { sites: sites } };\nsorties[1] = { payload: {\n    capteurs: lignes, compteurs: compteurs, evenements: evenements,\n    derniere_reception_iso: derniereReception\n} };\nreturn sorties;\n",
+    "outputs": 4,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "outputLabels": [
+      "vue simple",
+      "vue technique",
+      "courbe niveau",
+      "courbe batterie"
+    ],
+    "x": 380,
+    "y": 160,
+    "wires": [
+      [
+        "b1c2d3e4f5a60020"
+      ],
+      [
+        "b1c2d3e4f5a60021"
+      ],
+      [
+        "b1c2d3e4f5a60022"
+      ],
+      [
+        "b1c2d3e4f5a60023"
+      ]
+    ]
+  },
+  {
+    "id": "b1c2d3e4f5a60015",
+    "type": "inject",
+    "z": "b1c2d3e4f5a60001",
+    "name": "Réinitialiser l'affichage",
+    "props": [],
+    "repeat": "",
+    "crontab": "",
+    "once": false,
+    "onceDelay": "0.1",
+    "topic": "",
+    "x": 160,
+    "y": 380,
+    "wires": [
+      [
+        "b1c2d3e4f5a60016"
+      ]
+    ]
+  },
+  {
+    "id": "b1c2d3e4f5a60016",
+    "type": "function",
+    "z": "b1c2d3e4f5a60001",
+    "name": "Tout effacer",
+    "func": "// Efface l'état mémorisé et vide les deux courbes (utile avant une démonstration).\nflow.set(\"etats\", {});\nflow.set(\"alertes\", {});\nflow.set(\"compteurs\", { perdues: 0, doublons: 0, rejets: 0, retours_seq: 0 });\nflow.set(\"evenements\", []);\nnode.status({ fill: \"blue\", shape: \"dot\", text: \"réinitialisé à \" + new Date().toLocaleTimeString(\"fr-FR\") });\nreturn [{ payload: [] }, { topic: \"tic\" }];\n",
+    "outputs": 2,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "outputLabels": [
+      "vider les courbes",
+      "recalculer les vues"
+    ],
+    "x": 380,
+    "y": 380,
+    "wires": [
+      [
+        "b1c2d3e4f5a60022",
+        "b1c2d3e4f5a60023"
+      ],
+      [
+        "b1c2d3e4f5a60014"
+      ]
+    ]
+  },
+  {
+    "id": "b1c2d3e4f5a60020",
+    "type": "ui-template",
+    "z": "b1c2d3e4f5a60001",
+    "group": "b1c2d3e4f5a60006",
+    "page": "",
+    "ui": "",
+    "name": "AL5 – Vue simple",
+    "order": 1,
+    "width": "6",
+    "height": "0",
+    "head": "",
+    "format": "<template>\n  <div class=\"al5\">\n    <p v-if=\"!sites.length\" class=\"attente\">En attente des premières mesures…</p>\n    <div v-for=\"s in sites\" :key=\"s.node_id\" class=\"carte\" :class=\"s.palier\">\n      <div class=\"bandeau\">{{ s.libelle }}</div>\n      <div class=\"corps\">\n        <div class=\"site\">{{ s.nom }}</div>\n        <div class=\"paliers\" aria-label=\"Échelle des paliers\">\n          <span v-for=\"(p, i) in echelle\" :key=\"p.cle\" class=\"seg\" :class=\"[p.cle, { actif: s.rang === i }]\">{{ p.nom }}</span>\n        </div>\n        <template v-if=\"s.ancien\">\n          <div class=\"ancien\">{{ s.ancien }}<span v-if=\"s.ancien_iso\"> (mesure du {{ heure(s.ancien_iso) }})</span></div>\n        </template>\n        <template v-else>\n          <div class=\"niveau\">{{ s.niveau }} <span v-if=\"s.tendance\" class=\"tendance\">· {{ s.tendance }}</span></div>\n        </template>\n        <div class=\"action\">{{ s.action }}</div>\n        <div class=\"maj\">Dernière mesure : {{ heure(s.derniere_iso) }} ({{ depuis(s.derniere_iso) }})</div>\n      </div>\n    </div>\n  </div>\n</template>\n\n<script>\nexport default {\n  data () {\n    return { echelle: [{ cle: 'vert', nom: 'Vert' }, { cle: 'jaune', nom: 'Jaune' },\n                       { cle: 'orange', nom: 'Orange' }, { cle: 'rouge', nom: 'Rouge' }] }\n  },\n  computed: {\n    sites () { return (this.msg && this.msg.payload && this.msg.payload.sites) || [] }\n  },\n  methods: {\n    heure (iso) {\n      return iso ? new Date(iso).toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—'\n    },\n    depuis (iso) {\n      if (!iso) return ''\n      const min = Math.round((Date.now() - Date.parse(iso)) / 60000)\n      if (min < 1) return \"à l'instant\"\n      if (min < 60) return 'il y a ' + min + ' min'\n      if (min < 2880) return 'il y a ' + Math.floor(min / 60) + ' h ' + String(min % 60).padStart(2, '0')\n      return 'il y a ' + Math.floor(min / 1440) + ' jours'\n    }\n  }\n}\n</script>\n\n<style scoped>\n.al5 { display: flex; flex-direction: column; gap: 16px; width: 100%; }\n.attente { color: #5f6368; font-size: 1.1rem; }\n.carte { border-radius: 12px; overflow: hidden; border: 2px solid; background: #ffffff; }\n.bandeau { padding: 14px 18px; font-size: 1.5rem; font-weight: 700; color: #ffffff; }\n.corps { padding: 14px 18px; color: #202124; }\n.site { font-size: 1rem; color: #5f6368; }\n.paliers { display: flex; gap: 4px; margin: 10px 0; }\n.seg { flex: 1; text-align: center; padding: 6px 0; border-radius: 6px; font-size: 0.85rem; font-weight: 600;\n       opacity: 0.25; color: #ffffff; }\n.seg.actif { opacity: 1; outline: 3px solid #202124; outline-offset: 1px; }\n.seg.vert { background: #1e7b34; } .seg.jaune { background: #f2c200; color: #202124; }\n.seg.orange { background: #b45309; } .seg.rouge { background: #b3261e; }\n.niveau { font-size: 2.4rem; font-weight: 700; margin: 4px 0; }\n.tendance { font-size: 1.1rem; font-weight: 500; color: #5f6368; }\n.ancien { font-size: 1.05rem; color: #5f6368; margin: 6px 0; }\n.action { font-size: 1.1rem; margin: 8px 0; }\n.maj { font-size: 0.95rem; color: #5f6368; }\n.vert { border-color: #1e7b34; } .vert .bandeau { background: #1e7b34; }\n.jaune { border-color: #f2c200; } .jaune .bandeau { background: #f2c200; color: #202124; }\n.orange { border-color: #b45309; } .orange .bandeau { background: #b45309; }\n.rouge { border-color: #b3261e; } .rouge .bandeau { background: #b3261e; }\n.indisponible { border-color: #5f6368; } .indisponible .bandeau { background: #5f6368; }\n</style>",
+    "storeOutMessages": true,
+    "passthru": false,
+    "resendOnRefresh": true,
+    "templateScope": "local",
+    "className": "",
+    "x": 640,
+    "y": 100,
+    "wires": [
+      []
+    ]
+  },
+  {
+    "id": "b1c2d3e4f5a60021",
+    "type": "ui-template",
+    "z": "b1c2d3e4f5a60001",
+    "group": "b1c2d3e4f5a60008",
+    "page": "",
+    "ui": "",
+    "name": "AL6 – Capteurs et événements",
+    "order": 1,
+    "width": "12",
+    "height": "0",
+    "head": "",
+    "format": "<template>\n  <div class=\"al6\">\n    <p class=\"recepteur\">Récepteur : <strong>{{ d.derniere_reception_iso ? 'dernière trame reçue le ' + heure(d.derniere_reception_iso) + ' (' + depuis(d.derniere_reception_iso) + ')' : 'aucune trame reçue' }}</strong></p>\n    <p class=\"fuseau\">Heures affichées : heure locale de cet appareil ({{ fuseau }}).</p>\n\n    <div class=\"compteurs\">\n      <div><span>{{ c.perdues || 0 }}</span>trames perdues</div>\n      <div><span>{{ c.doublons || 0 }}</span>doublons écartés</div>\n      <div><span>{{ c.rejets || 0 }}</span>trames rejetées</div>\n      <div><span>{{ c.retours_seq || 0 }}</span>retours de seq</div>\n    </div>\n\n    <h4>Capteurs</h4>\n    <table>\n      <thead><tr><th>Site</th><th>Palier</th><th>État</th><th>Dernière trame</th><th>Prochaine attendue</th>\n        <th>Niveau</th><th>Bit d'alerte</th><th>Batterie</th><th>Signal<br>RSSI / SNR</th><th>seq</th>\n        <th>Trames perdues</th><th>Réception</th></tr></thead>\n      <tbody>\n        <tr v-for=\"l in (d.capteurs || [])\" :key=\"l.nom\">\n          <td>{{ l.nom }}</td><td>{{ l.palier }}<br><span class=\"petit\">{{ l.source }}</span></td>\n          <td :class=\"l.etat !== 'à jour' ? 'retard' : ''\">{{ l.etat }}</td>\n          <td>{{ heure(l.derniere_iso) }}<br><span class=\"petit\">{{ depuis(l.derniere_iso) }}</span></td>\n          <td>{{ l.prochaine_iso ? heure(l.prochaine_iso) : 'inconnue' }}</td><td>{{ l.niveau }}</td><td>{{ l.bit }}</td>\n          <td :class=\"l.batt_faible ? 'retard' : ''\">{{ l.batterie }}</td><td>{{ l.signal }}</td><td>{{ l.seq }}</td>\n          <td :class=\"l.perdues ? 'retard' : ''\">{{ l.perdues }}</td><td>{{ l.reception }}</td>\n        </tr>\n      </tbody>\n    </table>\n\n    <h4>Derniers événements</h4>\n    <p v-if=\"!(d.evenements || []).length\" class=\"vide\">Aucun événement.</p>\n    <ul>\n      <li v-for=\"(e, i) in (d.evenements || [])\" :key=\"i\">{{ heure(e.heure_iso) }} · capteur {{ e.capteur }} · {{ e.texte }}</li>\n    </ul>\n  </div>\n</template>\n\n<script>\nexport default {\n  computed: {\n    d () { return (this.msg && this.msg.payload) || {} },\n    c () { return this.d.compteurs || {} },\n    fuseau () { return Intl.DateTimeFormat().resolvedOptions().timeZone }\n  },\n  methods: {\n    heure (iso) {\n      return iso ? new Date(iso).toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—'\n    },\n    depuis (iso) {\n      if (!iso) return ''\n      const min = Math.round((Date.now() - Date.parse(iso)) / 60000)\n      if (min < 1) return \"à l'instant\"\n      if (min < 60) return 'il y a ' + min + ' min'\n      if (min < 2880) return 'il y a ' + Math.floor(min / 60) + ' h ' + String(min % 60).padStart(2, '0')\n      return 'il y a ' + Math.floor(min / 1440) + ' jours'\n    }\n  }\n}\n</script>\n\n<style scoped>\n.al6 { width: 100%; color: #202124; overflow-x: auto; }\n.recepteur { margin: 0 0 4px; }\n.fuseau { margin: 0 0 12px; font-size: 0.85rem; color: #5f6368; }\n.compteurs { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 16px; }\n.compteurs div { border: 1px solid #d9d9e0; border-radius: 8px; padding: 8px 14px; min-width: 120px; color: #5f6368; }\n.compteurs span { display: block; font-size: 1.6rem; font-weight: 700; color: #202124; }\nh4 { margin: 16px 0 8px; }\ntable { border-collapse: collapse; width: 100%; font-size: 0.9rem; }\nth, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #e5e5e5; vertical-align: top; }\n.petit { font-size: 0.8rem; color: #5f6368; }\nth { color: #5f6368; font-weight: 600; }\n.retard { color: #b3261e; font-weight: 600; }\nul { margin: 0; padding-left: 18px; font-size: 0.9rem; }\n.vide { color: #5f6368; }\n</style>",
+    "storeOutMessages": true,
+    "passthru": false,
+    "resendOnRefresh": true,
+    "templateScope": "local",
+    "className": "",
+    "x": 660,
+    "y": 160,
+    "wires": [
+      []
+    ]
+  },
+  {
+    "id": "b1c2d3e4f5a60022",
+    "type": "ui-chart",
+    "z": "b1c2d3e4f5a60001",
+    "group": "b1c2d3e4f5a60007",
+    "name": "AL6 – Courbe du niveau",
+    "label": "Niveau d'eau (mm) et seuils des paliers",
+    "order": 1,
+    "chartType": "line",
+    "category": "topic",
+    "categoryType": "msg",
+    "xAxisLabel": "",
+    "xAxisProperty": "x",
+    "xAxisPropertyType": "property",
+    "xAxisType": "time",
+    "xAxisFormat": "{dd}/{MM} {HH}:{mm}",
+    "xAxisFormatType": "custom",
+    "xmin": "",
+    "xmax": "",
+    "yAxisLabel": "mm",
+    "yAxisProperty": "y",
+    "yAxisPropertyType": "property",
+    "ymin": "0",
+    "ymax": "",
+    "bins": 10,
+    "action": "append",
+    "stackSeries": false,
+    "pointShape": "circle",
+    "pointRadius": 3,
+    "showLegend": true,
+    "removeOlder": "7",
+    "removeOlderUnit": "86400",
+    "removeOlderPoints": "2000",
+    "colors": [
+      "#B3261E",
+      "#B45309",
+      "#F2C200",
+      "#0095FF",
+      "#2CA02C",
+      "#A347E1",
+      "#8C564B",
+      "#17BECF",
+      "#7F7F7F"
+    ],
+    "textColor": [
+      "#666666"
+    ],
+    "textColorDefault": true,
+    "gridColor": [
+      "#e5e5e5"
+    ],
+    "gridColorDefault": true,
+    "width": "12",
+    "height": "6",
+    "className": "",
+    "interpolation": "linear",
+    "x": 640,
+    "y": 220,
+    "wires": [
+      []
+    ]
+  },
+  {
+    "id": "b1c2d3e4f5a60023",
+    "type": "ui-chart",
+    "z": "b1c2d3e4f5a60001",
+    "group": "b1c2d3e4f5a60007",
+    "name": "AL6 – Courbe de la batterie",
+    "label": "Batterie (V)",
+    "order": 2,
+    "chartType": "line",
+    "category": "topic",
+    "categoryType": "msg",
+    "xAxisLabel": "",
+    "xAxisProperty": "x",
+    "xAxisPropertyType": "property",
+    "xAxisType": "time",
+    "xAxisFormat": "{dd}/{MM} {HH}:{mm}",
+    "xAxisFormatType": "custom",
+    "xmin": "",
+    "xmax": "",
+    "yAxisLabel": "V",
+    "yAxisProperty": "y",
+    "yAxisPropertyType": "property",
+    "ymin": "2.5",
+    "ymax": "3.8",
+    "bins": 10,
+    "action": "append",
+    "stackSeries": false,
+    "pointShape": "circle",
+    "pointRadius": 3,
+    "showLegend": true,
+    "removeOlder": "7",
+    "removeOlderUnit": "86400",
+    "removeOlderPoints": "2000",
+    "colors": [
+      "#0095FF",
+      "#2CA02C",
+      "#A347E1",
+      "#8C564B",
+      "#17BECF",
+      "#7F7F7F",
+      "#FF7F0E",
+      "#D62728",
+      "#9467BD"
+    ],
+    "textColor": [
+      "#666666"
+    ],
+    "textColorDefault": true,
+    "gridColor": [
+      "#e5e5e5"
+    ],
+    "gridColorDefault": true,
+    "width": "12",
+    "height": "6",
+    "className": "",
+    "interpolation": "linear",
+    "x": 650,
+    "y": 280,
+    "wires": [
+      []
+    ]
+  }
+]

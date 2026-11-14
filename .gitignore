@@ -43,5 +43,6 @@ Thumbs.db
 *.swp
 
 # --- Fichiers compilés dans trame/encodeur ---
-trame/encodeur/encodeur.exe
+trame/encodeur/test_encodeur.exe
 trame/encodeur/encodeur.obj
+trame/encodeur/main.obj

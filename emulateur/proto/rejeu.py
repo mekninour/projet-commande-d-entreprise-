@@ -16,8 +16,8 @@ import argparse
 import csv
 import sys
 import time
-from dataclasses import dataclass
-from datetime import datetime, timezone
+from dataclasses import dataclass, replace
+from datetime import datetime, timedelta, timezone
 from typing import Callable, Iterator, List
 
 # Sentinelle "mesure invalide", alignée sur le contrat d'interface
@@ -98,28 +98,52 @@ def parser_csv(chemin: str) -> List[Mesure]:
     return mesures
 
 
+def duree_scenario(mesures: List[Mesure]) -> int:
+    """Durée d'un tour de scénario (s) : du 1er au dernier point, plus le
+    dernier pas, pour que le tour suivant reprenne au même rythme."""
+    if len(mesures) < 2:
+        return 300
+    return (mesures[-1].t_s - mesures[0].t_s) + (mesures[-1].t_s - mesures[-2].t_s)
+
+
 def rejouer(mesures: List[Mesure], facteur: float = 1.0, boucle: bool = False,
-            dormir: Callable[[float], None] = time.sleep) -> Iterator[Mesure]:
+            dormir: Callable[[float], None] = time.sleep,
+            horloge: Callable[[], float] = time.monotonic) -> Iterator[Mesure]:
     """Rejoue les mesures dans l'ordre, à horloge accélérée.
 
-    Attente réelle entre deux points = (t_s[i+1] - t_s[i]) / facteur.
+    Chaque point est livré à l'échéance absolue `début + (t_s - t_s0) / facteur`
+    (pas d'attente relative : les retards ne s'accumulent pas).
     `facteur` > 0 : 1 = temps réel, 60 = 60x plus rapide.
-    `boucle` : reboucle sur le scénario (1er point du cycle émis sans attente).
-    `dormir` : injectable (horloge simulée pour les tests).
+    `boucle` : reboucle sur le scénario. `t_s` et `horodatage` restent
+    STRICTEMENT croissants d'un tour à l'autre (décalés d'une durée de
+    scénario), car E5 calcule des écarts `t_s - t_dernier_envoi` en uint32.
+    `dormir` / `horloge` : injectables (horloge simulée pour les tests).
     """
     if facteur <= 0:
         raise ValueError("le facteur d'accélération doit être > 0")
+    t0 = mesures[0].t_s
+    duree = duree_scenario(mesures)
+    debut = horloge()
+    retard_signale = False
+    tour = 0
     while True:
-        precedent = None
+        decalage = tour * duree
         for m in mesures:
-            if precedent is not None:
-                dt_reel = (m.t_s - precedent.t_s) / facteur
-                if dt_reel > 0:
-                    dormir(dt_reel)
+            if decalage:
+                m = replace(m, t_s=m.t_s + decalage,
+                            horodatage=m.horodatage + timedelta(seconds=decalage))
+            cible = debut + (m.t_s - t0) / facteur
+            attente = cible - horloge()
+            if attente > 0:
+                dormir(attente)
+            elif attente < -1.0 and not retard_signale:
+                print(f"[rejeu] retard de {-attente:.1f} s sur l'horloge accélérée "
+                      f"(facteur trop élevé pour la machine ?)", file=sys.stderr)
+                retard_signale = True
             yield m
-            precedent = m
         if not boucle:
             return
+        tour += 1
 
 
 def main(argv=None) -> None:

@@ -9,13 +9,18 @@
 // C'est là, et nulle part ailleurs, que montent les compteurs d'émission
 // (trames, octets, temps d'air). L'éveil est encadré par reveille()/endort().
 //
-// Export série figé (campagnes M2/M3) :
-//   timestamp,scenario,mode,sf,trames,octets,toa_ms,eveil_ms
+// Export série (campagnes M2/M3) : 8 colonnes figées le 09/11 + retard_alerte_s
+// (décision D9 du 14/11 ; vide si le seuil n'est jamais franchi) :
+//   timestamp,scenario,mode,sf,trames,octets,toa_ms,eveil_ms,retard_alerte_s
 // -----------------------------------------------------------------------------
 
-// Surcoût LoRaWAN (MHDR+FHDR+FPort+MIC) ajouté à la taille applicative pour le
-// temps d'air. Les « octets » comptés restent la charge utile applicative.
-static const uint8_t OVERHEAD_LORAWAN = 13;
+// En-tête radio ajouté à la taille applicative pour le temps d'air (D9).
+// Les « octets » comptés restent la charge utile applicative (12 o).
+//   LoRaWAN : MHDR (1) + FHDR (7) + FPort (1) + MIC (4) = 13 octets.
+//   LoRa point à point (contrat v1.2 de Brest) : 0 octet.
+// Choix à confirmer à la réunion du 16/11.
+static const uint8_t ENTETE_LORAWAN = 13;
+static const uint8_t ENTETE_P2P     = 0;
 
 // Temps d'air d'une trame LoRa, en ms (formule Semtech).
 // Hypothèses : BW 125 kHz, CR 4/5, préambule 8, en-tête explicite, CRC activé.
@@ -35,25 +40,29 @@ inline float temps_air_ms(uint8_t taille_octets, uint8_t sf) {
 
 struct Compteurs {
     uint8_t  sf       = 7;
+    uint8_t  entete   = ENTETE_LORAWAN;   // octets d'en-tête radio (D9)
     uint32_t trames   = 0;
     uint32_t octets   = 0;
     float    toa_ms   = 0.0f;
     uint32_t eveil_ms = 0;
+    int32_t  retard_alerte_s = -1;   // -1 = seuil jamais franchi (D9)
     uint32_t _reveil  = 0;   // marqueur interne
 
     // Éveil : encadrer chaque cycle actif (now_ms = millis() sur ESP32).
     void reveille(uint32_t now_ms) { _reveil = now_ms; }
     void endort(uint32_t now_ms)   { eveil_ms += (now_ms - _reveil); }
 
-    // Point d'émission unique : taille = longueur applicative de la trame.
+    // Point d'émission unique (D1) : taille = longueur applicative de la trame.
     void emise(uint8_t taille_octets) {
         trames += 1;
         octets += taille_octets;
-        toa_ms += temps_air_ms(taille_octets + OVERHEAD_LORAWAN, sf);
+        toa_ms += temps_air_ms(taille_octets + entete, sf);
     }
 };
 
 // Exemple d'export série (Arduino) :
-//   Serial.println("timestamp,scenario,mode,sf,trames,octets,toa_ms,eveil_ms");
-//   Serial.printf("%lu,%s,%s,%u,%lu,%lu,%.1f,%lu\n", ts, scenario, mode,
+//   Serial.println("timestamp,scenario,mode,sf,trames,octets,toa_ms,eveil_ms,retard_alerte_s");
+//   Serial.printf("%lu,%s,%s,%u,%lu,%lu,%.1f,%lu,", ts, scenario, mode,
 //                 c.sf, c.trames, c.octets, c.toa_ms, c.eveil_ms);
+//   if (c.retard_alerte_s >= 0) Serial.print(c.retard_alerte_s);
+//   Serial.println();

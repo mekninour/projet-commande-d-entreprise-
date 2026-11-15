@@ -4,7 +4,7 @@
     "type": "tab",
     "label": "AL5 / AL6 – Tableaux de bord",
     "disabled": false,
-    "info": "MVP des tableaux de bord (B1). Lit pce92/mesures/+ et pce92/evenements (S2), et pce92/alertes/+ (moteur de B2, AL2).\nVue simple : /dashboard/simple · Vue technique : /dashboard/technique.\nVoir plateforme/dashboards/README.md."
+    "info": "MVP des tableaux de bord (B1). Lit pce92/mesures/+ et pce92/evenements (S2), et pce92/alertes/+ (moteur d'alerte de B2, plateforme/config/moteur_alerte.py).\nVue simple : /dashboard/simple · Vue technique : /dashboard/technique.\nVoir plateforme/dashboards/README.md."
   },
   {
     "id": "b1c2d3e4f5a60002",
@@ -134,7 +134,7 @@
   {
     "id": "b1c2d3e4f5a60007",
     "type": "ui-group",
-    "name": "Courbes",
+    "name": "Capteurs (du plus urgent au moins urgent)",
     "page": "b1c2d3e4f5a60005",
     "width": "12",
     "height": "1",
@@ -215,7 +215,7 @@
     "id": "b1c2d3e4f5a60017",
     "type": "mqtt in",
     "z": "b1c2d3e4f5a60001",
-    "name": "Paliers du moteur d'alerte (AL2)",
+    "name": "Alertes du moteur (B2)",
     "topic": "pce92/alertes/+",
     "qos": "1",
     "datatype": "json",
@@ -277,8 +277,8 @@
     "type": "function",
     "z": "b1c2d3e4f5a60001",
     "name": "Préparer l'affichage",
-    "func": "// AL5 / AL6 – Préparer l'affichage à partir des mesures (S2), des alertes (AL2) et des événements.\n// Entrées : pce92/mesures/<node_id>, pce92/alertes/<node_id> (moteur de B2, quand il sera prêt),\n//           pce92/evenements, et un « tic » toutes les 30 s.\n// Sorties : 1. vue simple (AL5)  2. vue technique (AL6)  3. courbe du niveau  4. courbe de la batterie\n// Les dates sont envoyées en ISO (UTC) et mises en forme dans le navigateur : les textes et les courbes\n// affichent ainsi la même heure, celle de l'appareil qui consulte (Paris pour l'équipe, Thiès sur place).\n\n// --- Réglages provisoires (à remplacer par le fichier de seuils et de sites de B2, AL1) ---\nconst SITES = { 3: \"Site de test (nœud 3)\" };\n// Seuils des paliers, en mm au-dessus du sol. Par défaut : jaune = marge critique du contrat (100 mm),\n// rouge = repère de danger du contrat (300 mm), orange = valeur intermédiaire PROVISOIRE.\nconst SEUILS_DEFAUT = { jaune: 100, orange: 200, rouge: 300 };\nconst SEUILS_PAR_SITE = {};      // ex. { 3: { jaune: 120, orange: 250, rouge: 400 } }\nconst TENDANCE_MM = 20;          // écart minimal pour parler de hausse ou de baisse\nconst BATT_FAIBLE_V = 3.2;       // contrat v1.2, périmètre V2 : batterie faible sous 3,20 V\n// Libellés et actions par palier (repris du L1, partie 4.1.2), à faire valider par le client.\nconst PALIERS = {\n    vert:   { rang: 0, libelle: \"NORMAL\",            action: \"Surveillance : aucune action.\" },\n    jaune:  { rang: 1, libelle: \"VIGILANCE JAUNE\",   action: \"Informer : suivre l'évolution du niveau.\" },\n    orange: { rang: 2, libelle: \"ALERTE ORANGE\",     action: \"Prévenir les zones à risque et pré-positionner les secours.\" },\n    rouge:  { rang: 3, libelle: \"ALERTE ROUGE\",      action: \"Évacuer les zones inondables. Appeler les secours.\" },\n    indisponible: { rang: -1, libelle: \"DONNÉES INDISPONIBLES\",\n                    action: \"Aucune mesure exploitable : la situation réelle est inconnue. Vérifier le capteur.\" }\n};\n// ------------------------------------------------------------------------------------------\n\nconst etats = flow.get(\"etats\") || {};          // dernier état connu par capteur\nconst alertes = flow.get(\"alertes\") || {};      // dernier palier reçu du moteur de B2, par capteur\nconst compteurs = flow.get(\"compteurs\") || { perdues: 0, doublons: 0, rejets: 0, retours_seq: 0 };\nlet evenements = flow.get(\"evenements\") || [];  // 10 derniers événements\nconst sorties = [null, null, null, null];\n\nfunction nomSite(id) { return SITES[id] || (\"Capteur n° \" + id); }\nfunction seuils(id) { return SEUILS_PAR_SITE[id] || SEUILS_DEFAUT; }\nfunction palierParHauteur(mm, s) {\n    if (mm >= s.rouge) return \"rouge\";\n    if (mm >= s.orange) return \"orange\";\n    if (mm >= s.jaune) return \"jaune\";\n    return \"vert\";\n}\n\n// 1. Une nouvelle mesure\nif (msg.topic && msg.topic.startsWith(\"pce92/mesures/\")) {\n    const m = msg.payload;\n    const e = etats[m.node_id] || { node_id: m.node_id };\n    if (m.water_valid) {\n        e.precedent_mm = e.dernier_valide ? e.dernier_valide.water_mm : null;\n        e.dernier_valide = m;\n    }\n    e.derniere = m;\n    // Heure d'arrivée dans Node-RED (sert à repérer un capteur muet). Pour l'historique\n    // rechargé depuis la base (S3), on reprend l'heure de réception d'origine.\n    e.arrivee = msg.replay ? Date.parse(m.received_at) : Date.now();\n    etats[m.node_id] = e;\n    const x = Date.parse(m.received_at);\n    const nom = nomSite(m.node_id);\n    const s = seuils(m.node_id);\n    const niveau = [];\n    const batterie = [];\n    // Trames perdues juste avant : on coupe la courbe (point vide au milieu du trou),\n    // pour ne pas tracer une ligne qui inventerait des mesures jamais reçues.\n    if (m.lost_before > 0) {\n        const xTrou = x - ((m.next_min || 30) * 60000) / 2;\n        niveau.push({ topic: nom, payload: { x: xTrou, y: null } });\n        batterie.push({ topic: nom, payload: { x: xTrou, y: null } });\n    }\n    // Les seuils d'abord (couleurs fixes : rouge, orange, jaune), puis la mesure.\n    niveau.unshift({ topic: \"Seuil rouge (\" + s.rouge + \" mm)\", payload: { x: x, y: s.rouge } },\n                   { topic: \"Seuil orange (\" + s.orange + \" mm)\", payload: { x: x, y: s.orange } },\n                   { topic: \"Seuil jaune (\" + s.jaune + \" mm)\", payload: { x: x, y: s.jaune } });\n    // Mesure invalide (0xFFFF) : point vide, la courbe est coupée à cet endroit.\n    niveau.push({ topic: nom, payload: { x: x, y: m.water_valid ? m.water_mm : null } });\n    batterie.push({ topic: nom, payload: { x: x, y: m.batt_v } });\n    sorties[2] = niveau;\n    sorties[3] = batterie;\n    e.perdues = (e.perdues || 0) + (m.lost_before || 0);\n    e.recues = (e.recues || 0) + 1;\n}\n\n// 2. Un palier calculé par le moteur d'alerte de B2 (AL2) : { node_id, palier, ... }\nif (msg.topic && msg.topic.startsWith(\"pce92/alertes/\")) {\n    const a = msg.payload || {};\n    if (PALIERS[a.palier] && a.palier !== \"indisponible\") {\n        alertes[a.node_id] = { palier: a.palier, recu_a: new Date().toISOString() };\n    }\n}\n\n// 3. Un événement (rejet, doublon, trames perdues, retour de seq)\nif (msg.topic === \"pce92/evenements\") {\n    const ev = msg.payload;\n    if (ev.type === \"doublon\") compteurs.doublons += 1;\n    if (ev.type === \"rejet\") compteurs.rejets += 1;\n    if (ev.type === \"retour_seq\") compteurs.retours_seq += 1;\n    const textes = {\n        trames_perdues: (ev.nombre + \" trame(s) perdue(s) avant la seq \" + ev.seq),\n        doublon: (\"doublon écarté (seq \" + ev.seq + \")\"),\n        rejet: (\"trame rejetée : \" + ev.raison),\n        retour_seq: (\"compteur revenu en arrière (\" + ev.seq_precedent + \" → \" + ev.seq + \")\")\n    };\n    evenements.unshift({ heure_iso: ev.received_at || new Date().toISOString(),\n                         capteur: ev.node_id ?? \"—\", texte: textes[ev.type] || ev.type });\n    evenements = evenements.slice(0, 10);\n}\n\nflow.set(\"etats\", etats);\nflow.set(\"alertes\", alertes);\nflow.set(\"compteurs\", compteurs);\nflow.set(\"evenements\", evenements);\n\n// 4. Recalculer les deux vues (à chaque message, y compris le tic de 30 s)\nconst sites = [], lignes = [];\nlet derniereReception = null;\nfor (const id of Object.keys(etats).sort((a, b) => a - b)) {\n    const e = etats[id];\n    const d = e.derniere;\n    const v = e.dernier_valide;\n    const periode = d.next_min || 60;\n    const marge = Math.max(5, periode / 2);                   // tolérance de retard, en minutes\n    // Capteur muet : aucune nouvelle trame n'est arrivée depuis next_min + marge.\n    const muet = Date.now() > (e.arrivee || Date.parse(d.received_at)) + (periode + marge) * 60000;\n\n    // Palier : moteur de B2 s'il a parlé, sinon calcul provisoire sur la hauteur + bit d'alerte du nœud.\n    let palier, source;\n    if (alertes[id]) {\n        palier = alertes[id].palier; source = \"moteur d'alerte\";\n    } else {\n        palier = v ? palierParHauteur(v.water_mm, seuils(id)) : \"vert\";\n        if (d.alert) palier = \"rouge\";                        // règle 3 : le bit d'alerte déclenche l'alerte\n        source = \"calcul provisoire\";\n    }\n    // Sans mesure exploitable, pas de verdict : jamais de vert pour un capteur muet.\n    const sansVerdict = muet || !d.water_valid;\n    if (sansVerdict) palier = \"indisponible\";\n\n    let tendance = \"\";\n    if (!sansVerdict && v && e.precedent_mm !== null && e.precedent_mm !== undefined) {\n        const diff = v.water_mm - e.precedent_mm;\n        tendance = diff >= TENDANCE_MM ? \"en hausse\" : (diff <= -TENDANCE_MM ? \"en baisse\" : \"stable\");\n    }\n\n    sites.push({\n        node_id: Number(id), nom: nomSite(id), palier: palier,\n        rang: PALIERS[palier].rang, libelle: PALIERS[palier].libelle, action: PALIERS[palier].action,\n        niveau: v ? Math.round(v.water_mm / 10) + \" cm\" : \"—\",\n        ancien: sansVerdict ? (v ? \"Dernier niveau connu : \" + Math.round(v.water_mm / 10) + \" cm\" : \"Aucun niveau connu\") : \"\",\n        ancien_iso: sansVerdict && v ? v.received_at : null,\n        tendance: tendance,\n        derniere_iso: d.received_at\n    });\n    lignes.push({\n        nom: nomSite(id), palier: PALIERS[palier].libelle, source: sansVerdict ? \"—\" : source,\n        etat: muet ? \"en retard\" : (d.water_valid ? \"à jour\" : \"mesure invalide\"),\n        derniere_iso: d.received_at,\n        prochaine_iso: d.expected_next_at,\n        perdues: e.perdues || 0,\n        reception: e.recues ? Math.round(100 * e.recues / (e.recues + (e.perdues || 0))) + \" %\" : \"—\",\n        niveau: d.water_valid ? d.water_mm + \" mm\" : \"invalide\",\n        bit: d.alert ? \"levé\" : \"non\",\n        batterie: d.batt_v === null ? \"inconnue\" : d.batt_v.toFixed(2) + \" V\" + (d.batt_v < BATT_FAIBLE_V ? \" (faible)\" : \"\"),\n        batt_faible: d.batt_v !== null && d.batt_v < BATT_FAIBLE_V,\n        signal: (d.rssi ?? \"—\") + \" dBm / \" + (d.snr ?? \"—\") + \" dB\",\n        seq: d.seq\n    });\n    if (!derniereReception || d.received_at > derniereReception) derniereReception = d.received_at;\n}\n\n// Total des trames perdues = somme par capteur (recalculée aussi après un redémarrage, grâce à S3).\ncompteurs.perdues = Object.values(etats).reduce((t, e) => t + (e.perdues || 0), 0);\nsorties[0] = { payload: { sites: sites } };\nsorties[1] = { payload: {\n    capteurs: lignes, compteurs: compteurs, evenements: evenements,\n    derniere_reception_iso: derniereReception\n} };\nreturn sorties;\n",
-    "outputs": 4,
+    "func": "// AL5 / AL6 – Préparer l'affichage à partir des mesures (S2), des alertes du moteur (B2) et des événements.\n// Entrées : pce92/mesures/<node_id> (S2), pce92/alertes/<node_id> (moteur d'alerte de B2,\n//           plateforme/config/moteur_alerte.py), pce92/evenements (S2), et un « tic » toutes les 30 s.\n// Sorties : 1. vue simple (AL5)  2. vue technique (AL6)  3. courbe du niveau  4. courbe de la batterie\n// Les dates sont envoyées en ISO (UTC) et mises en forme dans le navigateur : les textes et les courbes\n// affichent ainsi la même heure, celle de l'appareil qui consulte (Paris pour l'équipe, Thiès sur place).\n//\n// Qui décide de l'état ? Le moteur d'alerte de B2. Il lit le seuil de chaque capteur dans\n// plateforme/config/seuils.csv et publie, à chaque mesure valide, un objet\n// { node_id, site, etat: normal|alerte|muet, cause, hauteur_mm, seuil_mm, tendance,\n//   vitesse_mm_h, temps_avant_depassement_min, received_at }.\n// Les vues affichent cet état tel quel. Elles ne le recalculent que si le moteur n'a encore rien publié\n// pour ce capteur (moteur arrêté) : c'est alors un calcul de secours, signalé comme tel dans la vue technique.\n// Dans tous les cas, sans mesure exploitable (capteur muet ou mesure invalide), aucun verdict n'est affiché.\n\n// --- Réglages de secours (utilisés seulement tant que le moteur n'a rien publié pour un capteur) ---\nconst SEUIL_SECOURS_MM = 300;    // repère de danger du contrat d'interface (bit d'alerte à 300 mm)\nconst AVANT_DEPASSEMENT_MAX_MIN = 120; // la vue simple n'annonce un dépassement que s'il est prévu dans les 2 h\nconst TENDANCE_MM = 20;          // écart minimal pour parler de hausse ou de baisse (calcul de secours)\nconst BATT_FAIBLE_V = 3.2;       // contrat v1.2, périmètre V2 : batterie faible sous 3,20 V\n// Libellés et actions par état, à faire valider par le client.\nconst ETATS = {\n    normal:       { libelle: \"NORMAL\", action: \"Surveillance : aucune action.\" },\n    alerte:       { libelle: \"ALERTE\", action: \"Prévenir les zones à risque et se préparer à évacuer.\" },\n    indisponible: { libelle: \"DONNÉES INDISPONIBLES\",\n                    action: \"Aucune mesure exploitable : la situation réelle est inconnue. Vérifier le capteur.\" }\n};\nconst CAUSES = { seuil: \"seuil dépassé\", montee_rapide: \"montée rapide : seuil bientôt atteint\" };\nconst TENDANCES = { montante: \"en hausse\", descendante: \"en baisse\", stable: \"stable\" };\n// ------------------------------------------------------------------------------------------\n\nconst etats = flow.get(\"etats\") || {};          // dernière mesure connue par capteur\nconst alertes = flow.get(\"alertes\") || {};      // dernier objet publié par le moteur, par capteur\nconst compteurs = flow.get(\"compteurs\") || { perdues: 0, doublons: 0, rejets: 0, retours_seq: 0 };\nlet evenements = flow.get(\"evenements\") || [];  // 10 derniers événements\nconst sorties = [null, null, null, null, null];\nconst FENETRE_MS = 2 * 86400000;   // mini-courbes et courbes : 48 dernières heures\n\nfunction nomSite(id) { return (alertes[id] && alertes[id].site) || (\"Capteur n° \" + id); }\n// Noms des courbes : fixes (le nom du site arrive avec le moteur, il ne doit pas créer une 2e courbe).\nfunction courbe(id) { return \"Niveau – nœud \" + id; }\nfunction courbeSeuil(id) { return \"Seuil d'alerte – nœud \" + id; }\nfunction duree(min) {\n    const m = Math.round(min);\n    return m < 60 ? m + \" min\" : Math.floor(m / 60) + \" h \" + String(m % 60).padStart(2, \"0\");\n}\nfunction seuilConnu(id) { return alertes[id] ? alertes[id].seuil_mm : null; }\n\n// 1. Une nouvelle mesure\nif (msg.topic && msg.topic.startsWith(\"pce92/mesures/\")) {\n    const m = msg.payload;\n    const e = etats[m.node_id] || { node_id: m.node_id };\n    if (m.water_valid) {\n        e.precedent_mm = e.dernier_valide ? e.dernier_valide.water_mm : null;\n        e.dernier_valide = m;\n    }\n    e.derniere = m;\n    // Heure d'arrivée dans Node-RED (sert à repérer un capteur muet). Pour l'historique\n    // rechargé depuis la base (S3), on reprend l'heure de réception d'origine.\n    e.arrivee = msg.replay ? Date.parse(m.received_at) : Date.now();\n    etats[m.node_id] = e;\n    const x = Date.parse(m.received_at);\n    const niveau = [];\n    const batterie = [];\n    // La ligne de seuil d'abord (1re couleur : rouge). Seuil du moteur s'il est connu ; sinon le seuil\n    // de secours, ou un point vide si le moteur tourne déjà (son seuil arrive juste après la mesure).\n    const moteurActif = Object.keys(alertes).length > 0;\n    const s = seuilConnu(m.node_id);\n    niveau.push({ payload: { serie: courbeSeuil(m.node_id), x: x, y: s !== null ? s : (moteurActif ? null : SEUIL_SECOURS_MM) } });\n    // Trames perdues juste avant : on coupe la courbe (point vide au milieu du trou),\n    // pour ne pas tracer une ligne qui inventerait des mesures jamais reçues.\n    if (m.lost_before > 0) {\n        const xTrou = x - ((m.next_min || 30) * 60000) / 2;\n        niveau.push({ payload: { serie: courbe(m.node_id), x: xTrou, y: null } });\n        batterie.push({ payload: { serie: courbe(m.node_id).replace(\"Niveau\", \"Batterie\"), x: xTrou, y: null } });\n    }\n    // Mesure invalide (0xFFFF) : point vide, la courbe est coupée à cet endroit.\n    niveau.push({ payload: { serie: courbe(m.node_id), x: x, y: m.water_valid ? m.water_mm : null } });\n    batterie.push({ payload: { serie: courbe(m.node_id).replace(\"Niveau\", \"Batterie\"), x: x, y: m.batt_v } });\n    // Les courbes ne montrent qu'un capteur à la fois (choisi au-dessus des courbes) : par défaut le premier reçu.\n    if (flow.get(\"capteur_courbe\") === undefined) flow.set(\"capteur_courbe\", m.node_id);\n    if (flow.get(\"capteur_courbe\") === m.node_id) {\n        sorties[2] = niveau;\n        sorties[3] = batterie;\n    }\n    // Points des 48 dernières heures pour la mini-courbe de la tuile (null = trou).\n    e.points = (e.points || []).filter(p => p.x > Date.now() - FENETRE_MS);\n    if (m.lost_before > 0) e.points.push({ x: x - ((m.next_min || 30) * 60000) / 2, y: null });\n    e.points.push({ x: x, y: m.water_valid ? m.water_mm : null });\n    e.perdues = (e.perdues || 0) + (m.lost_before || 0);\n    e.recues = (e.recues || 0) + 1;\n}\n\n// 2. Un objet d'alerte publié par le moteur de B2\nif (msg.topic && msg.topic.startsWith(\"pce92/alertes/\")) {\n    const a = msg.payload || {};\n    if (a.node_id !== undefined && [\"normal\", \"alerte\", \"muet\"].includes(a.etat)) {\n        const avant = alertes[a.node_id];\n        alertes[a.node_id] = a;\n        // Seuil reçu pour la 1re fois, ou modifié dans seuils.csv : on place le point sur la ligne de seuil.\n        // (Seulement si ce capteur a déjà des mesures affichées : au démarrage, les alertes mémorisées par MQTT\n        //  arrivent avant l'historique, et ne doivent pas prendre les premières couleurs de la courbe.)\n        if (a.received_at && etats[a.node_id] && flow.get(\"capteur_courbe\") === a.node_id && (!avant || avant.seuil_mm !== a.seuil_mm)) {\n            sorties[2] = [{ payload: { serie: courbeSeuil(a.node_id), x: Date.parse(a.received_at), y: a.seuil_mm } }];\n        }\n    } else {\n        node.warn(\"Objet d'alerte ignoré (etat inconnu) : \" + JSON.stringify(a));\n    }\n}\n\n// 3. Un événement (rejet, doublon, trames perdues, retour de seq)\nif (msg.topic === \"pce92/evenements\") {\n    const ev = msg.payload;\n    if (ev.type === \"doublon\") compteurs.doublons += 1;\n    if (ev.type === \"rejet\") compteurs.rejets += 1;\n    if (ev.type === \"retour_seq\") compteurs.retours_seq += 1;\n    const textes = {\n        trames_perdues: (ev.nombre + \" trame(s) perdue(s) avant la seq \" + ev.seq),\n        doublon: (\"doublon écarté (seq \" + ev.seq + \")\"),\n        rejet: (\"trame rejetée : \" + ev.raison),\n        retour_seq: (\"compteur revenu en arrière (\" + ev.seq_precedent + \" → \" + ev.seq + \")\")\n    };\n    evenements.unshift({ heure_iso: ev.received_at || new Date().toISOString(),\n                         capteur: ev.node_id ?? \"—\", texte: textes[ev.type] || ev.type });\n    evenements = evenements.slice(0, 10);\n}\n\nflow.set(\"etats\", etats);\nflow.set(\"alertes\", alertes);\nflow.set(\"compteurs\", compteurs);\nflow.set(\"evenements\", evenements);\n\n// 4. Recalculer les deux vues (à chaque message, y compris le tic de 30 s)\nconst sites = [], lignes = [];\nlet derniereReception = null;\nfor (const id of Object.keys(etats).sort((a, b) => a - b)) {\n    const e = etats[id];\n    const d = e.derniere;\n    const v = e.dernier_valide;\n    const a = alertes[id];\n    const periode = d.next_min || 60;\n    // Capteur muet : aucune nouvelle trame depuis 2 × next_min + 5 min (même délai que le moteur\n    // d'alerte de B2) : une trame perdue est tolérée, deux ne le sont pas.\n    const delaiMuetMin = 2 * periode + 5;\n    const muet = Date.now() > (e.arrivee || Date.parse(d.received_at)) + delaiMuetMin * 60000\n                 || (a && a.etat === \"muet\");\n\n    // État : celui du moteur s'il a publié pour ce capteur, sinon calcul de secours sur le seuil de secours.\n    let etat, source, cause = null, tendance = \"\", vitesse = null, avantDepassement = null, seuil;\n    if (a) {\n        etat = a.etat === \"alerte\" ? \"alerte\" : \"normal\";\n        cause = a.cause;\n        seuil = a.seuil_mm;\n        tendance = TENDANCES[a.tendance] || \"\";\n        vitesse = a.vitesse_mm_h;\n        avantDepassement = a.temps_avant_depassement_min;\n        // Le moteur n'a pas encore répondu à la dernière mesure valide (normal pendant une fraction de seconde ;\n        // s'il dure, le moteur est sans doute arrêté) : on le signale dans la vue technique.\n        const enRetard = v && a.received_at !== v.received_at && Date.now() - e.arrivee > 10000;\n        source = enRetard ? \"moteur d'alerte (n'a pas répondu à la dernière mesure)\" : \"moteur d'alerte\";\n    } else {\n        seuil = SEUIL_SECOURS_MM;\n        etat = (v && v.water_mm >= seuil) || d.alert ? \"alerte\" : \"normal\";  // règle 3 : le bit d'alerte compte\n        if (etat === \"alerte\") cause = \"seuil\";\n        if (v && e.precedent_mm !== null && e.precedent_mm !== undefined) {\n            const diff = v.water_mm - e.precedent_mm;\n            tendance = diff >= TENDANCE_MM ? \"en hausse\" : (diff <= -TENDANCE_MM ? \"en baisse\" : \"stable\");\n        }\n        source = \"calcul de secours (moteur absent)\";\n    }\n    // Sans mesure exploitable, pas de verdict : jamais de NORMAL pour un capteur muet.\n    const sansVerdict = muet || !d.water_valid;\n    if (sansVerdict) { etat = \"indisponible\"; cause = null; tendance = \"\"; avantDepassement = null; }\n\n    let precision = \"\";\n    if (etat === \"alerte\" && CAUSES[cause]) precision = CAUSES[cause];\n    // Niveau repassé sous le seuil mais alerte maintenue par le moteur (marge de retour, pour ne pas clignoter).\n    if (etat === \"alerte\" && cause === \"seuil\" && v && seuil && v.water_mm < seuil)\n        precision = \"niveau juste sous le seuil : alerte maintenue jusqu'à une vraie baisse\";\n    // Vue simple : on n'annonce le dépassement que s'il est proche (moins de 2 h), sinon le chiffre n'a pas de sens.\n    if (etat === \"normal\" && avantDepassement !== null && avantDepassement !== undefined && avantDepassement <= AVANT_DEPASSEMENT_MAX_MIN)\n        precision = \"seuil atteint dans \" + duree(avantDepassement) + \" environ, au rythme actuel\";\n\n    sites.push({\n        node_id: Number(id), nom: nomSite(id), etat: etat,\n        libelle: ETATS[etat].libelle, action: ETATS[etat].action, precision: precision,\n        niveau: v ? Math.round(v.water_mm / 10) + \" cm\" : \"—\",\n        seuil: seuil !== null && seuil !== undefined ? Math.round(seuil / 10) + \" cm\" : \"—\",\n        ancien: sansVerdict ? (v ? \"Dernier niveau connu : \" + Math.round(v.water_mm / 10) + \" cm\" : \"Aucun niveau connu\") : \"\",\n        ancien_iso: sansVerdict && v ? v.received_at : null,\n        tendance: tendance,\n        derniere_iso: d.received_at\n    });\n    // Gravité, pour trier : 0 alerte, 1 données indisponibles, 2 dépassement proche, 3 normal.\n    const rang = etat === \"alerte\" ? 0 : (etat === \"indisponible\" ? 1 : (precision ? 2 : 3));\n    sites[sites.length - 1].rang = rang;\n    lignes.push({\n        node_id: Number(id), nom: nomSite(id), rang: rang, cle_etat: etat, precision: precision,\n        niveau_mm: v ? v.water_mm : null, seuil_mm: seuil ?? null,\n        points: (e.points || []).filter(p => p.x > Date.now() - FENETRE_MS), etat: ETATS[etat].libelle + (etat === \"alerte\" && cause ? \" (\" + cause + \")\" : \"\"),\n        source: sansVerdict ? \"—\" : source,\n        reception: muet ? \"en retard\" : (d.water_valid ? \"à jour\" : \"mesure invalide\"),\n        derniere_iso: d.received_at,\n        prochaine_iso: d.expected_next_at,\n        niveau: d.water_valid ? d.water_mm + \" mm\" : \"invalide\",\n        seuil: seuil !== null && seuil !== undefined ? seuil + \" mm\" : \"—\",\n        tendance: sansVerdict ? \"—\" : (tendance || \"—\") + (vitesse !== null && vitesse !== undefined ? \" (\" + vitesse + \" mm/h)\" : \"\"),\n        depassement: sansVerdict || avantDepassement === null || avantDepassement === undefined ? \"—\" : duree(avantDepassement),\n        bit: d.alert ? \"levé\" : \"non\",\n        batterie: d.batt_v === null ? \"inconnue\" : d.batt_v.toFixed(2) + \" V\" + (d.batt_v < BATT_FAIBLE_V ? \" (faible)\" : \"\"),\n        batt_faible: d.batt_v !== null && d.batt_v < BATT_FAIBLE_V,\n        signal: (d.rssi ?? \"—\") + \" dBm / \" + (d.snr ?? \"—\") + \" dB\",\n        seq: d.seq,\n        perdues: e.perdues || 0,\n        taux: e.recues ? Math.round(100 * e.recues / (e.recues + (e.perdues || 0))) + \" %\" : \"—\"\n    });\n    if (!derniereReception || d.received_at > derniereReception) derniereReception = d.received_at;\n}\n\n// Tri par gravité (le plus urgent en haut), puis par numéro de capteur.\nconst parGravite = (a, b) => (a.rang - b.rang) || (a.node_id - b.node_id);\nsites.sort(parGravite);\nlignes.sort(parGravite);\n\n// Capteur affiché dans les grandes courbes : celui choisi par un clic (capteur_manuel) ; sans clic, le plus\n// critique. Pas pendant le rechargement de l'historique.\n// Un capteur qui ENTRE en alerte remplace le choix de l'expert : la courbe bascule sur ce capteur.\nconst enAlerte = lignes.filter(l => l.rang === 0).map(l => l.node_id);\nconst avantAlerte = flow.get(\"ids_en_alerte\") || [];\nconst nouvelle = enAlerte.find(id => !avantAlerte.includes(id));\nif (!msg.replay && nouvelle !== undefined) flow.set(\"capteur_manuel\", nouvelle);\nflow.set(\"ids_en_alerte\", enAlerte);\nif (!msg.replay && lignes.length) {\n    const manuel = lignes.find(l => l.node_id === flow.get(\"capteur_manuel\"));\n    const voulu = manuel ? manuel.node_id : lignes[0].node_id;\n    if (voulu !== flow.get(\"capteur_courbe\")) sorties[4] = { payload: { node_id: voulu, auto: true } };\n}\n\n// Total des trames perdues = somme par capteur (recalculée aussi après un redémarrage, grâce à S3).\ncompteurs.perdues = Object.values(etats).reduce((t, e) => t + (e.perdues || 0), 0);\nsorties[0] = { payload: { sites: sites } };\nsorties[1] = { payload: {\n    capteurs: lignes, compteurs: compteurs, evenements: evenements,\n    derniere_reception_iso: derniereReception, capteur_courbe: flow.get(\"capteur_courbe\") ?? null\n} };\nreturn sorties;\n",
+    "outputs": 5,
     "timeout": 0,
     "noerr": 0,
     "initialize": "",
@@ -288,7 +288,8 @@
       "vue simple",
       "vue technique",
       "courbe niveau",
-      "courbe batterie"
+      "courbe batterie",
+      "changer le capteur des courbes"
     ],
     "x": 380,
     "y": 160,
@@ -297,13 +298,17 @@
         "b1c2d3e4f5a60020"
       ],
       [
-        "b1c2d3e4f5a60021"
+        "b1c2d3e4f5a60021",
+        "b1c2d3e4f5a60050"
       ],
       [
         "b1c2d3e4f5a60022"
       ],
       [
         "b1c2d3e4f5a60023"
+      ],
+      [
+        "b1c2d3e4f5a60051"
       ]
     ]
   },
@@ -331,7 +336,7 @@
     "type": "function",
     "z": "b1c2d3e4f5a60001",
     "name": "Tout effacer",
-    "func": "// Efface l'état mémorisé et vide les deux courbes (utile avant une démonstration).\nflow.set(\"etats\", {});\nflow.set(\"alertes\", {});\nflow.set(\"compteurs\", { perdues: 0, doublons: 0, rejets: 0, retours_seq: 0 });\nflow.set(\"evenements\", []);\nnode.status({ fill: \"blue\", shape: \"dot\", text: \"réinitialisé à \" + new Date().toLocaleTimeString(\"fr-FR\") });\nreturn [{ payload: [] }, { topic: \"tic\" }];\n",
+    "func": "// Efface l'état mémorisé et vide les deux courbes (utile avant une démonstration).\nflow.set(\"etats\", {});\nflow.set(\"alertes\", {});\nflow.set(\"compteurs\", { perdues: 0, doublons: 0, rejets: 0, retours_seq: 0 });\nflow.set(\"evenements\", []);\nflow.set(\"capteur_courbe\", undefined);\nflow.set(\"capteur_manuel\", undefined);\nflow.set(\"ids_en_alerte\", []);\nnode.status({ fill: \"blue\", shape: \"dot\", text: \"réinitialisé à \" + new Date().toLocaleTimeString(\"fr-FR\") });\nreturn [{ payload: [] }, { topic: \"tic\" }];\n",
     "outputs": 2,
     "timeout": 0,
     "noerr": 0,
@@ -366,7 +371,7 @@
     "width": "6",
     "height": "0",
     "head": "",
-    "format": "<template>\n  <div class=\"al5\">\n    <p v-if=\"!sites.length\" class=\"attente\">En attente des premières mesures…</p>\n    <div v-for=\"s in sites\" :key=\"s.node_id\" class=\"carte\" :class=\"s.palier\">\n      <div class=\"bandeau\">{{ s.libelle }}</div>\n      <div class=\"corps\">\n        <div class=\"site\">{{ s.nom }}</div>\n        <div class=\"paliers\" aria-label=\"Échelle des paliers\">\n          <span v-for=\"(p, i) in echelle\" :key=\"p.cle\" class=\"seg\" :class=\"[p.cle, { actif: s.rang === i }]\">{{ p.nom }}</span>\n        </div>\n        <template v-if=\"s.ancien\">\n          <div class=\"ancien\">{{ s.ancien }}<span v-if=\"s.ancien_iso\"> (mesure du {{ heure(s.ancien_iso) }})</span></div>\n        </template>\n        <template v-else>\n          <div class=\"niveau\">{{ s.niveau }} <span v-if=\"s.tendance\" class=\"tendance\">· {{ s.tendance }}</span></div>\n        </template>\n        <div class=\"action\">{{ s.action }}</div>\n        <div class=\"maj\">Dernière mesure : {{ heure(s.derniere_iso) }} ({{ depuis(s.derniere_iso) }})</div>\n      </div>\n    </div>\n  </div>\n</template>\n\n<script>\nexport default {\n  data () {\n    return { echelle: [{ cle: 'vert', nom: 'Vert' }, { cle: 'jaune', nom: 'Jaune' },\n                       { cle: 'orange', nom: 'Orange' }, { cle: 'rouge', nom: 'Rouge' }] }\n  },\n  computed: {\n    sites () { return (this.msg && this.msg.payload && this.msg.payload.sites) || [] }\n  },\n  methods: {\n    heure (iso) {\n      return iso ? new Date(iso).toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—'\n    },\n    depuis (iso) {\n      if (!iso) return ''\n      const min = Math.round((Date.now() - Date.parse(iso)) / 60000)\n      if (min < 1) return \"à l'instant\"\n      if (min < 60) return 'il y a ' + min + ' min'\n      if (min < 2880) return 'il y a ' + Math.floor(min / 60) + ' h ' + String(min % 60).padStart(2, '0')\n      return 'il y a ' + Math.floor(min / 1440) + ' jours'\n    }\n  }\n}\n</script>\n\n<style scoped>\n.al5 { display: flex; flex-direction: column; gap: 16px; width: 100%; }\n.attente { color: #5f6368; font-size: 1.1rem; }\n.carte { border-radius: 12px; overflow: hidden; border: 2px solid; background: #ffffff; }\n.bandeau { padding: 14px 18px; font-size: 1.5rem; font-weight: 700; color: #ffffff; }\n.corps { padding: 14px 18px; color: #202124; }\n.site { font-size: 1rem; color: #5f6368; }\n.paliers { display: flex; gap: 4px; margin: 10px 0; }\n.seg { flex: 1; text-align: center; padding: 6px 0; border-radius: 6px; font-size: 0.85rem; font-weight: 600;\n       opacity: 0.25; color: #ffffff; }\n.seg.actif { opacity: 1; outline: 3px solid #202124; outline-offset: 1px; }\n.seg.vert { background: #1e7b34; } .seg.jaune { background: #f2c200; color: #202124; }\n.seg.orange { background: #b45309; } .seg.rouge { background: #b3261e; }\n.niveau { font-size: 2.4rem; font-weight: 700; margin: 4px 0; }\n.tendance { font-size: 1.1rem; font-weight: 500; color: #5f6368; }\n.ancien { font-size: 1.05rem; color: #5f6368; margin: 6px 0; }\n.action { font-size: 1.1rem; margin: 8px 0; }\n.maj { font-size: 0.95rem; color: #5f6368; }\n.vert { border-color: #1e7b34; } .vert .bandeau { background: #1e7b34; }\n.jaune { border-color: #f2c200; } .jaune .bandeau { background: #f2c200; color: #202124; }\n.orange { border-color: #b45309; } .orange .bandeau { background: #b45309; }\n.rouge { border-color: #b3261e; } .rouge .bandeau { background: #b3261e; }\n.indisponible { border-color: #5f6368; } .indisponible .bandeau { background: #5f6368; }\n</style>",
+    "format": "<template>\n  <div class=\"al5\">\n    <p v-if=\"!sites.length\" class=\"attente\">En attente des premières mesures…</p>\n    <div v-for=\"s in sites\" :key=\"s.node_id\" class=\"carte\" :class=\"s.etat\">\n      <div class=\"bandeau\">{{ s.libelle }}</div>\n      <div class=\"corps\">\n        <div class=\"site\">{{ s.nom }}</div>\n        <div class=\"echelle\" aria-label=\"État\">\n          <span v-for=\"p in echelle\" :key=\"p.cle\" class=\"seg\" :class=\"[p.cle, { actif: s.etat === p.cle }]\">{{ p.nom }}</span>\n        </div>\n        <template v-if=\"s.ancien\">\n          <div class=\"ancien\">{{ s.ancien }}<span v-if=\"s.ancien_iso\"> (mesure du {{ heure(s.ancien_iso) }})</span></div>\n        </template>\n        <template v-else>\n          <div class=\"niveau\">{{ s.niveau }} <span v-if=\"s.tendance\" class=\"tendance\">· {{ s.tendance }}</span></div>\n          <div class=\"seuil\">Seuil d'alerte : {{ s.seuil }}</div>\n          <div v-if=\"s.precision\" class=\"precision\">{{ s.precision }}</div>\n        </template>\n        <div class=\"action\">{{ s.action }}</div>\n        <div class=\"maj\">Dernière mesure : {{ heure(s.derniere_iso) }} ({{ depuis(s.derniere_iso) }})</div>\n      </div>\n    </div>\n  </div>\n</template>\n\n<script>\nexport default {\n  data () {\n    return { echelle: [{ cle: 'normal', nom: 'Normal' }, { cle: 'alerte', nom: 'Alerte' }] }\n  },\n  computed: {\n    sites () { return (this.msg && this.msg.payload && this.msg.payload.sites) || [] }\n  },\n  methods: {\n    heure (iso) {\n      return iso ? new Date(iso).toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—'\n    },\n    depuis (iso) {\n      if (!iso) return ''\n      const min = Math.round((Date.now() - Date.parse(iso)) / 60000)\n      if (min < 1) return \"à l'instant\"\n      if (min < 60) return 'il y a ' + min + ' min'\n      if (min < 2880) return 'il y a ' + Math.floor(min / 60) + ' h ' + String(min % 60).padStart(2, '0')\n      return 'il y a ' + Math.floor(min / 1440) + ' jours'\n    }\n  }\n}\n</script>\n\n<style scoped>\n.al5 { display: flex; flex-direction: column; gap: 16px; width: 100%; }\n.attente { color: #5f6368; font-size: 1.1rem; }\n.carte { border-radius: 12px; overflow: hidden; border: 2px solid; background: #ffffff; }\n.bandeau { padding: 14px 18px; font-size: 1.5rem; font-weight: 700; color: #ffffff; }\n.corps { padding: 14px 18px; color: #202124; }\n.site { font-size: 1rem; color: #5f6368; }\n.echelle { display: flex; gap: 4px; margin: 10px 0; }\n.seg { flex: 1; text-align: center; padding: 6px 0; border-radius: 6px; font-size: 0.85rem; font-weight: 600;\n       opacity: 0.25; color: #ffffff; }\n.seg.actif { opacity: 1; outline: 3px solid #202124; outline-offset: 1px; }\n.seg.normal { background: #1e7b34; } .seg.alerte { background: #b3261e; }\n.niveau { font-size: 2.4rem; font-weight: 700; margin: 4px 0; }\n.tendance { font-size: 1.1rem; font-weight: 500; color: #5f6368; }\n.ancien { font-size: 1.05rem; color: #5f6368; margin: 6px 0; }\n.action { font-size: 1.1rem; margin: 8px 0; }\n.maj { font-size: 0.95rem; color: #5f6368; }\n.seuil { font-size: 1rem; color: #5f6368; }\n.precision { font-size: 1.05rem; font-weight: 600; margin: 6px 0; }\n.normal { border-color: #1e7b34; } .normal .bandeau { background: #1e7b34; }\n.alerte { border-color: #b3261e; } .alerte .bandeau { background: #b3261e; }\n.alerte .precision { color: #b3261e; }\n.indisponible { border-color: #5f6368; } .indisponible .bandeau { background: #5f6368; }\n</style>",
     "storeOutMessages": true,
     "passthru": false,
     "resendOnRefresh": true,
@@ -390,7 +395,7 @@
     "width": "12",
     "height": "0",
     "head": "",
-    "format": "<template>\n  <div class=\"al6\">\n    <p class=\"recepteur\">Récepteur : <strong>{{ d.derniere_reception_iso ? 'dernière trame reçue le ' + heure(d.derniere_reception_iso) + ' (' + depuis(d.derniere_reception_iso) + ')' : 'aucune trame reçue' }}</strong></p>\n    <p class=\"fuseau\">Heures affichées : heure locale de cet appareil ({{ fuseau }}).</p>\n\n    <div class=\"compteurs\">\n      <div><span>{{ c.perdues || 0 }}</span>trames perdues</div>\n      <div><span>{{ c.doublons || 0 }}</span>doublons écartés</div>\n      <div><span>{{ c.rejets || 0 }}</span>trames rejetées</div>\n      <div><span>{{ c.retours_seq || 0 }}</span>retours de seq</div>\n    </div>\n\n    <h4>Capteurs</h4>\n    <table>\n      <thead><tr><th>Site</th><th>Palier</th><th>État</th><th>Dernière trame</th><th>Prochaine attendue</th>\n        <th>Niveau</th><th>Bit d'alerte</th><th>Batterie</th><th>Signal<br>RSSI / SNR</th><th>seq</th>\n        <th>Trames perdues</th><th>Réception</th></tr></thead>\n      <tbody>\n        <tr v-for=\"l in (d.capteurs || [])\" :key=\"l.nom\">\n          <td>{{ l.nom }}</td><td>{{ l.palier }}<br><span class=\"petit\">{{ l.source }}</span></td>\n          <td :class=\"l.etat !== 'à jour' ? 'retard' : ''\">{{ l.etat }}</td>\n          <td>{{ heure(l.derniere_iso) }}<br><span class=\"petit\">{{ depuis(l.derniere_iso) }}</span></td>\n          <td>{{ l.prochaine_iso ? heure(l.prochaine_iso) : 'inconnue' }}</td><td>{{ l.niveau }}</td><td>{{ l.bit }}</td>\n          <td :class=\"l.batt_faible ? 'retard' : ''\">{{ l.batterie }}</td><td>{{ l.signal }}</td><td>{{ l.seq }}</td>\n          <td :class=\"l.perdues ? 'retard' : ''\">{{ l.perdues }}</td><td>{{ l.reception }}</td>\n        </tr>\n      </tbody>\n    </table>\n\n    <h4>Derniers événements</h4>\n    <p v-if=\"!(d.evenements || []).length\" class=\"vide\">Aucun événement.</p>\n    <ul>\n      <li v-for=\"(e, i) in (d.evenements || [])\" :key=\"i\">{{ heure(e.heure_iso) }} · capteur {{ e.capteur }} · {{ e.texte }}</li>\n    </ul>\n  </div>\n</template>\n\n<script>\nexport default {\n  computed: {\n    d () { return (this.msg && this.msg.payload) || {} },\n    c () { return this.d.compteurs || {} },\n    fuseau () { return Intl.DateTimeFormat().resolvedOptions().timeZone }\n  },\n  methods: {\n    heure (iso) {\n      return iso ? new Date(iso).toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—'\n    },\n    depuis (iso) {\n      if (!iso) return ''\n      const min = Math.round((Date.now() - Date.parse(iso)) / 60000)\n      if (min < 1) return \"à l'instant\"\n      if (min < 60) return 'il y a ' + min + ' min'\n      if (min < 2880) return 'il y a ' + Math.floor(min / 60) + ' h ' + String(min % 60).padStart(2, '0')\n      return 'il y a ' + Math.floor(min / 1440) + ' jours'\n    }\n  }\n}\n</script>\n\n<style scoped>\n.al6 { width: 100%; color: #202124; overflow-x: auto; }\n.recepteur { margin: 0 0 4px; }\n.fuseau { margin: 0 0 12px; font-size: 0.85rem; color: #5f6368; }\n.compteurs { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 16px; }\n.compteurs div { border: 1px solid #d9d9e0; border-radius: 8px; padding: 8px 14px; min-width: 120px; color: #5f6368; }\n.compteurs span { display: block; font-size: 1.6rem; font-weight: 700; color: #202124; }\nh4 { margin: 16px 0 8px; }\ntable { border-collapse: collapse; width: 100%; font-size: 0.9rem; }\nth, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #e5e5e5; vertical-align: top; }\n.petit { font-size: 0.8rem; color: #5f6368; }\nth { color: #5f6368; font-weight: 600; }\n.retard { color: #b3261e; font-weight: 600; }\nul { margin: 0; padding-left: 18px; font-size: 0.9rem; }\n.vide { color: #5f6368; }\n</style>",
+    "format": "<template>\n  <div class=\"al6\">\n    <p class=\"recepteur\">Récepteur : <strong>{{ d.derniere_reception_iso ? 'dernière trame reçue le ' + heure(d.derniere_reception_iso) + ' (' + depuis(d.derniere_reception_iso) + ')' : 'aucune trame reçue' }}</strong></p>\n    <p class=\"fuseau\">Heures affichées : heure locale de cet appareil ({{ fuseau }}). Courbes : 48 dernières heures ; compteurs et événements : 7 derniers jours. Au-delà : page Historique.</p>\n\n    <div class=\"compteurs\">\n      <div><span>{{ c.perdues || 0 }}</span>trames perdues</div>\n      <div><span>{{ c.doublons || 0 }}</span>doublons écartés</div>\n      <div><span>{{ c.rejets || 0 }}</span>trames rejetées</div>\n      <div><span>{{ c.retours_seq || 0 }}</span>retours de seq</div>\n    </div>\n\n    <h4>Capteurs</h4>\n    <table>\n      <thead><tr><th>Site</th><th>État</th><th>Réception</th><th>Dernière trame</th><th>Prochaine attendue</th>\n        <th>Niveau</th><th>Seuil</th><th>Tendance</th><th>Avant dépassement</th><th>Bit d'alerte</th><th>Batterie</th>\n        <th>Signal<br>RSSI / SNR</th><th>seq</th><th>Trames perdues</th><th>Taux de réception</th></tr></thead>\n      <tbody>\n        <tr v-for=\"l in (d.capteurs || [])\" :key=\"l.nom\">\n          <td>{{ l.nom }}</td><td>{{ l.etat }}<br><span class=\"petit\">{{ l.source }}</span></td>\n          <td :class=\"l.reception !== 'à jour' ? 'retard' : ''\">{{ l.reception }}</td>\n          <td>{{ heure(l.derniere_iso) }}<br><span class=\"petit\">{{ depuis(l.derniere_iso) }}</span></td>\n          <td>{{ l.prochaine_iso ? heure(l.prochaine_iso) : 'inconnue' }}</td><td>{{ l.niveau }}</td>\n          <td>{{ l.seuil }}</td><td>{{ l.tendance }}</td><td>{{ l.depassement }}</td><td>{{ l.bit }}</td>\n          <td :class=\"l.batt_faible ? 'retard' : ''\">{{ l.batterie }}</td><td>{{ l.signal }}</td><td>{{ l.seq }}</td>\n          <td :class=\"l.perdues ? 'retard' : ''\">{{ l.perdues }}</td><td>{{ l.taux }}</td>\n        </tr>\n      </tbody>\n    </table>\n\n    <h4>Derniers événements</h4>\n    <p v-if=\"!(d.evenements || []).length\" class=\"vide\">Aucun événement.</p>\n    <ul>\n      <li v-for=\"(e, i) in (d.evenements || [])\" :key=\"i\">{{ heure(e.heure_iso) }} · capteur {{ e.capteur }} · {{ e.texte }}</li>\n    </ul>\n  </div>\n</template>\n\n<script>\nexport default {\n  computed: {\n    d () { return (this.msg && this.msg.payload) || {} },\n    c () { return this.d.compteurs || {} },\n    fuseau () { return Intl.DateTimeFormat().resolvedOptions().timeZone }\n  },\n  methods: {\n    heure (iso) {\n      return iso ? new Date(iso).toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—'\n    },\n    depuis (iso) {\n      if (!iso) return ''\n      const min = Math.round((Date.now() - Date.parse(iso)) / 60000)\n      if (min < 1) return \"à l'instant\"\n      if (min < 60) return 'il y a ' + min + ' min'\n      if (min < 2880) return 'il y a ' + Math.floor(min / 60) + ' h ' + String(min % 60).padStart(2, '0')\n      return 'il y a ' + Math.floor(min / 1440) + ' jours'\n    }\n  }\n}\n</script>\n\n<style scoped>\n.al6 { width: 100%; color: #202124; overflow-x: auto; }\n.recepteur { margin: 0 0 4px; }\n.fuseau { margin: 0 0 12px; font-size: 0.85rem; color: #5f6368; }\n.compteurs { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 16px; }\n.compteurs div { border: 1px solid #d9d9e0; border-radius: 8px; padding: 8px 14px; min-width: 120px; color: #5f6368; }\n.compteurs span { display: block; font-size: 1.6rem; font-weight: 700; color: #202124; }\nh4 { margin: 16px 0 8px; }\ntable { border-collapse: collapse; width: 100%; font-size: 0.9rem; }\nth, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #e5e5e5; vertical-align: top; }\n.petit { font-size: 0.8rem; color: #5f6368; }\nth { color: #5f6368; font-weight: 600; }\n.retard { color: #b3261e; font-weight: 600; }\nul { margin: 0; padding-left: 18px; font-size: 0.9rem; }\n.vide { color: #5f6368; }\n</style>",
     "storeOutMessages": true,
     "passthru": false,
     "resendOnRefresh": true,
@@ -408,11 +413,11 @@
     "z": "b1c2d3e4f5a60001",
     "group": "b1c2d3e4f5a60007",
     "name": "AL6 – Courbe du niveau",
-    "label": "Niveau d'eau (mm) et seuils des paliers",
-    "order": 1,
+    "label": "Niveau d'eau (mm) et seuil d'alerte – 48 dernières heures",
+    "order": 2,
     "chartType": "line",
-    "category": "topic",
-    "categoryType": "msg",
+    "category": "serie",
+    "categoryType": "property",
     "xAxisLabel": "",
     "xAxisProperty": "x",
     "xAxisPropertyType": "property",
@@ -432,19 +437,19 @@
     "pointShape": "circle",
     "pointRadius": 3,
     "showLegend": true,
-    "removeOlder": "7",
+    "removeOlder": "2",
     "removeOlderUnit": "86400",
     "removeOlderPoints": "2000",
     "colors": [
       "#B3261E",
-      "#B45309",
-      "#F2C200",
       "#0095FF",
       "#2CA02C",
       "#A347E1",
       "#8C564B",
       "#17BECF",
-      "#7F7F7F"
+      "#7F7F7F",
+      "#FF7F0E",
+      "#9467BD"
     ],
     "textColor": [
       "#666666"
@@ -470,11 +475,11 @@
     "z": "b1c2d3e4f5a60001",
     "group": "b1c2d3e4f5a60007",
     "name": "AL6 – Courbe de la batterie",
-    "label": "Batterie (V)",
-    "order": 2,
+    "label": "Batterie (V) – 48 dernières heures",
+    "order": 3,
     "chartType": "line",
-    "category": "topic",
-    "categoryType": "msg",
+    "category": "serie",
+    "categoryType": "property",
     "xAxisLabel": "",
     "xAxisProperty": "x",
     "xAxisPropertyType": "property",
@@ -494,7 +499,7 @@
     "pointShape": "circle",
     "pointRadius": 3,
     "showLegend": true,
-    "removeOlder": "7",
+    "removeOlder": "2",
     "removeOlderUnit": "86400",
     "removeOlderPoints": "2000",
     "colors": [
@@ -522,6 +527,437 @@
     "interpolation": "linear",
     "x": 650,
     "y": 280,
+    "wires": [
+      []
+    ]
+  },
+  {
+    "id": "b1c2d3e4f5a60050",
+    "type": "ui-template",
+    "z": "b1c2d3e4f5a60001",
+    "group": "b1c2d3e4f5a60007",
+    "page": "",
+    "ui": "",
+    "name": "AL6 – Tuiles des capteurs",
+    "order": 1,
+    "width": "12",
+    "height": "0",
+    "head": "",
+    "format": "<template>\n  <div class=\"grille\">\n    <p v-if=\"!capteurs.length\" class=\"vide\">En attente des premières mesures…</p>\n    <button v-for=\"c in capteurs\" :key=\"c.node_id\" class=\"tuile\" :class=\"[c.cle_etat, { choisie: c.node_id === choisi }]\"\n            @click=\"choisir(c.node_id)\" :aria-pressed=\"c.node_id === choisi\">\n      <div class=\"haut\">\n        <span class=\"nom\">{{ c.nom }}</span>\n        <span class=\"etat\">{{ libelle(c) }}</span>\n      </div>\n      <div class=\"valeur\">\n        <span class=\"mm\">{{ c.niveau_mm !== null ? c.niveau_mm + ' mm' : '—' }}</span>\n        <span class=\"tend\">{{ c.tendance !== '—' ? c.tendance : '' }}</span>\n      </div>\n      <svg viewBox=\"0 0 200 50\" preserveAspectRatio=\"none\" class=\"mini\" aria-hidden=\"true\">\n        <line v-if=\"c.seuil_mm\" x1=\"0\" x2=\"200\" :y1=\"y(c, c.seuil_mm)\" :y2=\"y(c, c.seuil_mm)\" class=\"seuil\" />\n        <path :d=\"chemin(c)\" class=\"courbe\" />\n      </svg>\n      <div class=\"bas\">\n        <span>seuil {{ c.seuil }}</span>\n        <span :class=\"{ rouge: c.perdues }\">{{ c.perdues }} perdue(s)</span>\n        <span :class=\"{ rouge: c.reception !== 'à jour' }\">{{ depuis(c.derniere_iso) }}</span>\n      </div>\n      <div v-if=\"c.precision\" class=\"precision\">{{ c.precision }}</div>\n    </button>\n    <p v-if=\"capteurs.length\" class=\"aide\">Triés du plus urgent au moins urgent · mini-courbes sur 48 h · cliquer sur une tuile pour afficher ses courbes en grand ci-dessous (un capteur en alerte s'affiche automatiquement).</p>\n  </div>\n</template>\n\n<script>\nexport default {\n  computed: {\n    capteurs () { return (this.msg && this.msg.payload && this.msg.payload.capteurs) || [] },\n    choisi () { return this.msg && this.msg.payload ? this.msg.payload.capteur_courbe : null }\n  },\n  methods: {\n    choisir (id) { this.send({ payload: { node_id: id } }) },\n    libelle (c) { return { alerte: 'ALERTE', indisponible: 'INDISPONIBLE', normal: 'NORMAL' }[c.cle_etat] || '' },\n    haut (c) {\n      const ys = (c.points || []).map(p => p.y).filter(v => v !== null)\n      return Math.max(c.seuil_mm || 0, ...ys, 1) * 1.15\n    },\n    y (c, v) { return 48 - (v / this.haut(c)) * 46 },\n    chemin (c) {\n      // Même axe de temps pour toutes les tuiles : de la plus ancienne mesure affichée (48 h au plus) à maintenant.\n      const fin = Date.now()\n      const xs = this.capteurs.flatMap(k => (k.points || []).map(p => p.x))\n      const debut = xs.length ? Math.min(...xs) : fin - 2 * 86400000\n      let d = '', leve = true\n      for (const p of (c.points || [])) {\n        if (p.y === null) { leve = true; continue }\n        const x = Math.max(0, Math.min(200, ((p.x - debut) / (fin - debut)) * 200))\n        d += (leve ? 'M' : 'L') + x.toFixed(1) + ' ' + this.y(c, p.y).toFixed(1) + ' '\n        leve = false\n      }\n      return d\n    },\n    depuis (iso) {\n      if (!iso) return ''\n      const min = Math.round((Date.now() - Date.parse(iso)) / 60000)\n      if (min < 1) return \"à l'instant\"\n      if (min < 60) return 'il y a ' + min + ' min'\n      if (min < 2880) return 'il y a ' + Math.floor(min / 60) + ' h'\n      return 'il y a ' + Math.floor(min / 1440) + ' j'\n    }\n  }\n}\n</script>\n\n<style scoped>\n.grille { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; width: 100%; }\n.vide, .aide { grid-column: 1 / -1; color: #5f6368; font-size: 0.85rem; margin: 0; }\n.tuile { text-align: left; background: #ffffff; border: 1px solid #d9d9e0; border-left: 6px solid #9aa0a6; border-radius: 8px;\n         padding: 10px 12px; cursor: pointer; font: inherit; color: #202124; display: flex; flex-direction: column; gap: 4px; }\n.tuile:hover { box-shadow: 0 1px 4px rgba(0,0,0,0.15); }\n.tuile.choisie { outline: 3px solid #1f3a5f; outline-offset: 1px; }\n.haut { display: flex; justify-content: space-between; align-items: center; gap: 8px; }\n.nom { font-weight: 600; }\n.etat { font-size: 0.75rem; font-weight: 700; padding: 2px 6px; border-radius: 4px; color: #ffffff; background: #9aa0a6; }\n.normal { border-left-color: #1e7b34; } .normal .etat { background: #1e7b34; }\n.alerte { border-left-color: #b3261e; background: #fdf3f2; } .alerte .etat { background: #b3261e; }\n.indisponible { border-left-color: #5f6368; } .indisponible .etat { background: #5f6368; }\n.valeur { display: flex; align-items: baseline; gap: 8px; }\n.mm { font-size: 1.4rem; font-weight: 700; }\n.tend { font-size: 0.85rem; color: #5f6368; }\n.mini { width: 100%; height: 50px; }\n.seuil { stroke: #b3261e; stroke-width: 1; stroke-dasharray: 4 3; vector-effect: non-scaling-stroke; }\n.courbe { fill: none; stroke: #0b6bcb; stroke-width: 2; vector-effect: non-scaling-stroke; }\n.bas { display: flex; justify-content: space-between; gap: 6px; font-size: 0.8rem; color: #5f6368; }\n.rouge { color: #b3261e; font-weight: 600; }\n.precision { font-size: 0.8rem; font-weight: 600; color: #8a4b00; }\n</style>\n",
+    "storeOutMessages": true,
+    "passthru": false,
+    "resendOnRefresh": true,
+    "templateScope": "local",
+    "className": "",
+    "x": 640,
+    "y": 340,
+    "wires": [
+      [
+        "b1c2d3e4f5a60051"
+      ]
+    ]
+  },
+  {
+    "id": "b1c2d3e4f5a60051",
+    "type": "function",
+    "z": "b1c2d3e4f5a60001",
+    "name": "Changer de capteur",
+    "func": "// Vue technique – changer le capteur des grandes courbes : clic sur une tuile (choix de l'expert, mémorisé)\n// ou bascule automatique vers le capteur le plus critique. On relit ses 48 dernières heures dans la base (S3).\nconst id = Number(msg.payload && msg.payload.node_id);\nif (!Number.isFinite(id)) return null;\nif (!msg.payload.auto) flow.set(\"capteur_manuel\", id);\nflow.set(\"capteur_courbe\", id);\nmsg.node_id = id;\nmsg.params = { $node_id: id, $depuis: new Date(Date.now() - 2 * 86400000).toISOString() };\nreturn msg;\n",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "outputLabels": [],
+    "x": 860,
+    "y": 340,
+    "wires": [
+      [
+        "b1c2d3e4f5a60052"
+      ]
+    ]
+  },
+  {
+    "id": "b1c2d3e4f5a60052",
+    "type": "sqlite",
+    "z": "b1c2d3e4f5a60001",
+    "mydb": "c1d2e3f4a5b60002",
+    "sqlquery": "prepared",
+    "sql": "SELECT received_at, water_mm, water_valid, batt_v, next_min, lost_before\nFROM mesures\nWHERE node_id = $node_id AND received_at >= $depuis\nORDER BY received_at;",
+    "name": "Lire 48 h du capteur",
+    "x": 1060,
+    "y": 340,
+    "wires": [
+      [
+        "b1c2d3e4f5a60053"
+      ]
+    ]
+  },
+  {
+    "id": "b1c2d3e4f5a60053",
+    "type": "function",
+    "z": "b1c2d3e4f5a60001",
+    "name": "Courbes du capteur",
+    "func": "// Vue technique – reconstruire les deux courbes (niveau, batterie) pour le capteur choisi, à partir de la base.\n// Sorties : 1. courbe du niveau  2. courbe de la batterie  3. recalcul des vues (pour mettre à jour le choix)\nconst lignes = msg.payload || [];\nconst id = msg.node_id;\nconst a = (flow.get(\"alertes\") || {})[id];\nconst seuil = a ? a.seuil_mm : 300;\nconst serieSeuil = \"Seuil d'alerte – nœud \" + id, serieNiveau = \"Niveau – nœud \" + id, serieBatt = \"Batterie – nœud \" + id;\nconst seuils = [], niveau = [], batterie = [];\nlet precedent = null;\nfor (const l of lignes) {\n    const x = Date.parse(l.received_at);\n    // Mêmes règles que la vue en direct : courbe coupée avant des trames perdues et sur une mesure invalide ;\n    // en plus ici, coupée si le capteur est resté muet plus de 2 × next_min + 5 min.\n    const trou = l.lost_before > 0 || (precedent !== null && x - precedent > (2 * (l.next_min || 30) + 5) * 60000);\n    if (trou && precedent !== null) {\n        const xt = Math.round((precedent + x) / 2);\n        niveau.push({ serie: serieNiveau, x: xt, y: null });\n        batterie.push({ serie: serieBatt, x: xt, y: null });\n    }\n    seuils.push({ serie: serieSeuil, x: x, y: seuil });\n    niveau.push({ serie: serieNiveau, x: x, y: l.water_valid === 1 ? l.water_mm : null });\n    batterie.push({ serie: serieBatt, x: x, y: l.batt_v });\n    precedent = x;\n}\nreturn [\n    { action: \"replace\", payload: lignes.length ? seuils.concat(niveau) : [] },\n    { action: \"replace\", payload: lignes.length ? batterie : [] },\n    { topic: \"tic\" }\n];\n",
+    "outputs": 3,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "outputLabels": [
+      "courbe niveau",
+      "courbe batterie",
+      "recalculer les vues"
+    ],
+    "x": 1260,
+    "y": 340,
+    "wires": [
+      [
+        "b1c2d3e4f5a60022"
+      ],
+      [
+        "b1c2d3e4f5a60023"
+      ],
+      [
+        "b1c2d3e4f5a60014"
+      ]
+    ]
+  },
+  {
+    "id": "b1c2d3e4f5a60030",
+    "type": "ui-page",
+    "name": "Historique",
+    "ui": "b1c2d3e4f5a60002",
+    "path": "/historique",
+    "icon": "history",
+    "layout": "grid",
+    "theme": "b1c2d3e4f5a60003",
+    "breakpoints": [
+      {
+        "name": "Default",
+        "px": "0",
+        "cols": "3"
+      },
+      {
+        "name": "Tablet",
+        "px": "576",
+        "cols": "6"
+      },
+      {
+        "name": "Small Desktop",
+        "px": "768",
+        "cols": "9"
+      },
+      {
+        "name": "Desktop",
+        "px": "1024",
+        "cols": "12"
+      }
+    ],
+    "order": 3,
+    "className": "",
+    "visible": "true",
+    "disabled": "false"
+  },
+  {
+    "id": "b1c2d3e4f5a60031",
+    "type": "ui-group",
+    "name": "Historique : choisir un capteur et une période",
+    "page": "b1c2d3e4f5a60030",
+    "width": "12",
+    "height": "1",
+    "order": 1,
+    "showTitle": true,
+    "className": "",
+    "visible": "true",
+    "disabled": "false",
+    "groupType": "default"
+  },
+  {
+    "id": "b1c2d3e4f5a60032",
+    "type": "ui-group",
+    "name": "Niveau d'eau",
+    "page": "b1c2d3e4f5a60030",
+    "width": "12",
+    "height": "1",
+    "order": 2,
+    "showTitle": true,
+    "className": "",
+    "visible": "true",
+    "disabled": "false",
+    "groupType": "default"
+  },
+  {
+    "id": "b1c2d3e4f5a60033",
+    "type": "ui-group",
+    "name": "Résumé de la période",
+    "page": "b1c2d3e4f5a60030",
+    "width": "12",
+    "height": "1",
+    "order": 3,
+    "showTitle": true,
+    "className": "",
+    "visible": "true",
+    "disabled": "false",
+    "groupType": "default"
+  },
+  {
+    "id": "b1c2d3e4f5a60040",
+    "type": "comment",
+    "z": "b1c2d3e4f5a60001",
+    "name": "Historique : relit la base S3 à la demande (capteur + période), sans toucher à la vue en direct",
+    "info": "",
+    "x": 300,
+    "y": 460,
+    "wires": []
+  },
+  {
+    "id": "b1c2d3e4f5a60041",
+    "type": "ui-template",
+    "z": "b1c2d3e4f5a60001",
+    "group": "b1c2d3e4f5a60031",
+    "page": "",
+    "ui": "",
+    "name": "Historique – choix",
+    "order": 1,
+    "width": "12",
+    "height": "0",
+    "head": "",
+    "format": "<template>\n  <div class=\"choix\">\n    <p v-if=\"!capteurs.length\" class=\"vide\">Aucune mesure enregistrée pour l'instant.</p>\n    <template v-else>\n      <label>Capteur\n        <select v-model=\"capteur\">\n          <option v-for=\"c in capteurs\" :key=\"c.node_id\" :value=\"c.node_id\">{{ c.nom }}</option>\n        </select>\n      </label>\n      <label>Période\n        <select v-model=\"jours\">\n          <option :value=\"1\">24 dernières heures</option>\n          <option :value=\"2\">48 dernières heures</option>\n          <option :value=\"7\">7 derniers jours</option>\n          <option :value=\"30\">30 derniers jours</option>\n        </select>\n      </label>\n      <button @click=\"afficher\">Afficher</button>\n      <a :href=\"'/pce92/mesures?node_id=' + capteur + '&jours=' + jours + '&format=csv'\">Exporter en CSV</a>\n    </template>\n  </div>\n</template>\n\n<script>\nexport default {\n  data () { return { capteurs: [], capteur: null, jours: 2 } },\n  mounted () { this.send({ payload: { action: 'liste' } }) },\n  watch: {\n    msg (m) {\n      if (m && m.payload && Array.isArray(m.payload.capteurs)) {\n        this.capteurs = m.payload.capteurs\n        if (this.capteurs.length && !this.capteurs.some(c => c.node_id === this.capteur)) {\n          this.capteur = this.capteurs[0].node_id\n          this.afficher()\n        }\n      }\n    }\n  },\n  methods: {\n    afficher () {\n      if (this.capteur !== null) this.send({ payload: { action: 'afficher', node_id: this.capteur, jours: this.jours } })\n    }\n  }\n}\n</script>\n\n<style scoped>\n.choix { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 16px; width: 100%; color: #202124; }\nlabel { display: flex; flex-direction: column; gap: 4px; font-size: 0.9rem; color: #5f6368; }\nselect { min-width: 200px; padding: 8px; border: 1px solid #c4c7c5; border-radius: 6px; font-size: 1rem; color: #202124; background: #ffffff; }\nbutton { padding: 9px 18px; border: none; border-radius: 6px; background: #1f3a5f; color: #ffffff; font-size: 1rem; cursor: pointer; }\na { padding: 9px 0; color: #1f3a5f; font-weight: 600; }\n.vide { color: #5f6368; }\n</style>\n",
+    "storeOutMessages": true,
+    "passthru": false,
+    "resendOnRefresh": true,
+    "templateScope": "local",
+    "className": "",
+    "x": 160,
+    "y": 520,
+    "wires": [
+      [
+        "b1c2d3e4f5a60042"
+      ]
+    ]
+  },
+  {
+    "id": "b1c2d3e4f5a60042",
+    "type": "function",
+    "z": "b1c2d3e4f5a60001",
+    "name": "Quelle requête ?",
+    "func": "// Historique – choisir la requête selon la demande de la page (liste des capteurs ou période d'un capteur).\nconst d = msg.payload || {};\nif (d.action === \"liste\") return [msg, null];\nif (d.action === \"afficher\") {\n    const jours = [1, 2, 7, 30].includes(Number(d.jours)) ? Number(d.jours) : 2;\n    msg.node_id = Number(d.node_id);\n    msg.jours = jours;\n    msg.depuis_iso = new Date(Date.now() - jours * 86400000).toISOString();\n    msg.params = { $depuis: msg.depuis_iso, $node_id: msg.node_id };\n    return [null, msg];\n}\nreturn null;\n",
+    "outputs": 2,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "outputLabels": [
+      "liste des capteurs",
+      "période d'un capteur"
+    ],
+    "x": 360,
+    "y": 520,
+    "wires": [
+      [
+        "b1c2d3e4f5a60043"
+      ],
+      [
+        "b1c2d3e4f5a60047"
+      ]
+    ]
+  },
+  {
+    "id": "b1c2d3e4f5a60043",
+    "type": "sqlite",
+    "z": "b1c2d3e4f5a60001",
+    "mydb": "c1d2e3f4a5b60002",
+    "sqlquery": "fixed",
+    "sql": "SELECT node_id, COUNT(*) AS n FROM mesures GROUP BY node_id ORDER BY node_id;",
+    "name": "Lister les capteurs",
+    "x": 570,
+    "y": 480,
+    "wires": [
+      [
+        "b1c2d3e4f5a60044"
+      ]
+    ]
+  },
+  {
+    "id": "b1c2d3e4f5a60044",
+    "type": "function",
+    "z": "b1c2d3e4f5a60001",
+    "name": "Liste pour le choix",
+    "func": "// Historique – liste des capteurs présents dans la base, avec le nom du site donné par le moteur (seuils.csv).\nconst alertes = flow.get(\"alertes\") || {};\nconst capteurs = (msg.payload || []).map(l => ({\n    node_id: l.node_id,\n    nom: (alertes[l.node_id] && alertes[l.node_id].site ? alertes[l.node_id].site + \" (nœud \" + l.node_id + \")\" : \"Capteur n° \" + l.node_id)\n}));\nreturn { payload: { capteurs: capteurs } };\n",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "outputLabels": [],
+    "x": 780,
+    "y": 480,
+    "wires": [
+      [
+        "b1c2d3e4f5a60041"
+      ]
+    ]
+  },
+  {
+    "id": "b1c2d3e4f5a60047",
+    "type": "sqlite",
+    "z": "b1c2d3e4f5a60001",
+    "mydb": "c1d2e3f4a5b60002",
+    "sqlquery": "prepared",
+    "sql": "SELECT node_id, received_at, water_mm, water_valid, seq, next_min, lost_before\nFROM mesures\nWHERE node_id = $node_id AND received_at >= $depuis\nORDER BY received_at;",
+    "name": "Lire les mesures",
+    "x": 570,
+    "y": 560,
+    "wires": [
+      [
+        "b1c2d3e4f5a60048"
+      ]
+    ]
+  },
+  {
+    "id": "b1c2d3e4f5a60048",
+    "type": "function",
+    "z": "b1c2d3e4f5a60001",
+    "name": "Garder les mesures",
+    "func": "// Garde les mesures lues, puis passe à la lecture des événements de la même période.\nmsg.mesures = msg.payload || [];\nreturn msg;\n",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "outputLabels": [],
+    "x": 770,
+    "y": 560,
+    "wires": [
+      [
+        "b1c2d3e4f5a60049"
+      ]
+    ]
+  },
+  {
+    "id": "b1c2d3e4f5a60049",
+    "type": "sqlite",
+    "z": "b1c2d3e4f5a60001",
+    "mydb": "c1d2e3f4a5b60002",
+    "sqlquery": "prepared",
+    "sql": "SELECT received_at, type, details\nFROM evenements\nWHERE node_id = $node_id AND received_at >= $depuis\nORDER BY received_at;",
+    "name": "Lire les événements",
+    "x": 970,
+    "y": 560,
+    "wires": [
+      [
+        "b1c2d3e4f5a6004a"
+      ]
+    ]
+  },
+  {
+    "id": "b1c2d3e4f5a6004a",
+    "type": "function",
+    "z": "b1c2d3e4f5a60001",
+    "name": "Préparer l'historique",
+    "func": "// Historique – préparer la courbe et le résumé de la période choisie.\n// Sorties : 1. courbe (remplace tout le contenu)  2. résumé\nconst lignes = msg.mesures || [];\nconst evts = msg.payload || [];\nconst id = msg.node_id;\nconst a = (flow.get(\"alertes\") || {})[id];\nconst seuil = a ? a.seuil_mm : 300;\nconst seuilSource = a ? \"seuils.csv, via le moteur d'alerte\" : \"seuil de secours (le moteur n'a pas encore publié pour ce capteur)\";\nconst nom = a && a.site ? a.site + \" (nœud \" + id + \")\" : \"Capteur n° \" + id;\n\n// Courbe : la ligne de seuil d'abord (1re couleur : rouge), puis le niveau.\n// On coupe la courbe (point vide) : avant des trames perdues, sur une mesure invalide,\n// et quand le capteur est resté muet plus de 2 × next_min + 5 min.\nconst points = [];\nconst niveau = [];\nlet precedent = null;\nfor (const l of lignes) {\n    const x = Date.parse(l.received_at);\n    const periode = l.next_min || 30;\n    const trou = l.lost_before > 0 || (precedent !== null && x - precedent > (2 * periode + 5) * 60000);\n    if (trou && precedent !== null) niveau.push({ serie: \"Niveau\", x: Math.round((precedent + x) / 2), y: null });\n    niveau.push({ serie: \"Niveau\", x: x, y: l.water_valid === 1 ? l.water_mm : null });\n    precedent = x;\n}\nif (lignes.length) {\n    const debut = Date.parse(lignes[0].received_at), fin = Date.parse(lignes[lignes.length - 1].received_at);\n    points.push({ serie: \"Seuil d'alerte actuel (\" + seuil + \" mm)\", x: debut, y: seuil },\n                { serie: \"Seuil d'alerte actuel (\" + seuil + \" mm)\", x: fin, y: seuil });\n}\nconst courbe = { action: \"replace\", payload: points.concat(niveau) };\nif (!lignes.length) courbe.payload = [];\n\n// Résumé\nconst valides = lignes.filter(l => l.water_valid === 1);\nconst perdues = lignes.reduce((t, l) => t + (l.lost_before || 0), 0);\nlet max = null;\nfor (const l of valides) if (!max || l.water_mm > max.water_mm) max = l;\nconst textes = {\n    trames_perdues: e => e.nombre + \" trame(s) perdue(s) avant la seq \" + e.seq,\n    doublon: e => \"doublon écarté (seq \" + e.seq + \")\",\n    retour_seq: e => \"compteur revenu en arrière (\" + e.seq_precedent + \" → \" + e.seq + \")\",\n    rejet: e => \"trame rejetée : \" + e.raison\n};\nconst evenements = evts.map(l => {\n    let e = {};\n    try { e = JSON.parse(l.details); } catch (err) { e = { type: l.type }; }\n    return { heure_iso: l.received_at, texte: textes[l.type] ? textes[l.type](e) : l.type };\n});\nconst resume = { payload: {\n    node_id: id, nom: nom, depuis_iso: msg.depuis_iso, jusqua_iso: new Date().toISOString(),\n    mesures: lignes.length, perdues: perdues,\n    taux: lignes.length ? Math.round(100 * lignes.length / (lignes.length + perdues)) + \" %\" : \"—\",\n    invalides: lignes.length - valides.length,\n    max_mm: max ? max.water_mm + \" mm\" : \"—\", max_iso: max ? max.received_at : null,\n    seuil_mm: seuil, seuil_source: seuilSource,\n    au_dessus: valides.filter(l => l.water_mm >= seuil).length,\n    premiere_iso: lignes.length ? lignes[0].received_at : null,\n    derniere_iso: lignes.length ? lignes[lignes.length - 1].received_at : null,\n    evenements: evenements\n} };\nnode.status({ fill: \"blue\", shape: \"dot\", text: nom + \" · \" + msg.jours + \" j · \" + lignes.length + \" mesure(s)\" });\nreturn [courbe, resume];\n",
+    "outputs": 2,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "outputLabels": [
+      "courbe",
+      "résumé"
+    ],
+    "x": 1180,
+    "y": 600,
+    "wires": [
+      [
+        "b1c2d3e4f5a60046"
+      ],
+      [
+        "b1c2d3e4f5a6004b"
+      ]
+    ]
+  },
+  {
+    "id": "b1c2d3e4f5a60046",
+    "type": "ui-chart",
+    "z": "b1c2d3e4f5a60001",
+    "group": "b1c2d3e4f5a60032",
+    "name": "Historique – courbe",
+    "label": "Niveau d'eau (mm) sur la période choisie",
+    "order": 1,
+    "chartType": "line",
+    "category": "serie",
+    "categoryType": "property",
+    "xAxisLabel": "",
+    "xAxisProperty": "x",
+    "xAxisPropertyType": "property",
+    "xAxisType": "time",
+    "xAxisFormat": "{dd}/{MM} {HH}:{mm}",
+    "xAxisFormatType": "custom",
+    "xmin": "",
+    "xmax": "",
+    "yAxisLabel": "mm",
+    "yAxisProperty": "y",
+    "yAxisPropertyType": "property",
+    "ymin": "0",
+    "ymax": "",
+    "bins": 10,
+    "action": "replace",
+    "stackSeries": false,
+    "pointShape": "circle",
+    "pointRadius": 3,
+    "showLegend": true,
+    "removeOlder": "0",
+    "removeOlderUnit": "86400",
+    "removeOlderPoints": "",
+    "colors": [
+      "#B3261E",
+      "#0095FF"
+    ],
+    "textColor": [
+      "#666666"
+    ],
+    "textColorDefault": true,
+    "gridColor": [
+      "#e5e5e5"
+    ],
+    "gridColorDefault": true,
+    "width": "12",
+    "height": "6",
+    "className": "",
+    "interpolation": "linear",
+    "x": 1240,
+    "y": 520,
+    "wires": [
+      []
+    ]
+  },
+  {
+    "id": "b1c2d3e4f5a6004b",
+    "type": "ui-template",
+    "z": "b1c2d3e4f5a60001",
+    "group": "b1c2d3e4f5a60033",
+    "page": "",
+    "ui": "",
+    "name": "Historique – résumé",
+    "order": 1,
+    "width": "12",
+    "height": "0",
+    "head": "",
+    "format": "<template>\n  <div class=\"resume\">\n    <p v-if=\"!r.node_id\" class=\"vide\">Choisir un capteur et une période.</p>\n    <template v-else>\n      <p class=\"titre\"><strong>{{ r.nom }}</strong> · du {{ heure(r.depuis_iso) }} au {{ heure(r.jusqua_iso) }}</p>\n      <p v-if=\"!r.mesures\" class=\"vide\">Aucune mesure sur cette période.</p>\n      <template v-else>\n        <div class=\"chiffres\">\n          <div><span>{{ r.mesures }}</span>mesures reçues</div>\n          <div><span>{{ r.perdues }}</span>trames perdues</div>\n          <div><span>{{ r.taux }}</span>taux de réception</div>\n          <div><span>{{ r.invalides }}</span>mesures invalides</div>\n          <div><span>{{ r.max_mm }}</span>niveau maximal<br><small>{{ heure(r.max_iso) }}</small></div>\n          <div><span>{{ r.au_dessus }}</span>mesures au-dessus du seuil actuel ({{ r.seuil_mm }} mm)</div>\n        </div>\n        <p class=\"note\">Seuil : {{ r.seuil_source }}. Première mesure : {{ heure(r.premiere_iso) }} · dernière : {{ heure(r.derniere_iso) }}.</p>\n        <h4>Événements de la période</h4>\n        <p v-if=\"!r.evenements.length\" class=\"vide\">Aucun événement.</p>\n        <ul>\n          <li v-for=\"(e, i) in r.evenements\" :key=\"i\">{{ heure(e.heure_iso) }} · {{ e.texte }}</li>\n        </ul>\n      </template>\n    </template>\n  </div>\n</template>\n\n<script>\nexport default {\n  computed: { r () { return (this.msg && this.msg.payload) || {} } },\n  methods: {\n    heure (iso) {\n      return iso ? new Date(iso).toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—'\n    }\n  }\n}\n</script>\n\n<style scoped>\n.resume { width: 100%; color: #202124; }\n.titre { margin: 0 0 12px; }\n.chiffres { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 8px; }\n.chiffres div { border: 1px solid #d9d9e0; border-radius: 8px; padding: 8px 14px; min-width: 130px; color: #5f6368; font-size: 0.9rem; }\n.chiffres span { display: block; font-size: 1.6rem; font-weight: 700; color: #202124; }\n.note { font-size: 0.85rem; color: #5f6368; margin: 4px 0 0; }\nh4 { margin: 16px 0 8px; }\nul { margin: 0; padding-left: 18px; font-size: 0.9rem; }\n.vide { color: #5f6368; }\n</style>\n",
+    "storeOutMessages": true,
+    "passthru": false,
+    "resendOnRefresh": true,
+    "templateScope": "local",
+    "className": "",
+    "x": 1420,
+    "y": 600,
     "wires": [
       []
     ]

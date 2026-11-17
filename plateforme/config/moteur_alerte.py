@@ -119,7 +119,7 @@ def calculer_temps_avant_depassement(trame_act, trame_prec, seuil):
 
 def est_alerte(est_prec_alerte, hauteur, seuil, temps_depassement):
     """Évalue les conditions de déclenchement (dépassement avec hystérésis à 5% ou montée rapide critique)."""
-    seuil_hysteresis = seuil * 0.95  # Retour à la normale sous 95% du seuil
+    seuil_hysteresis = seuil * 0.90  # Retour à la normale sous 95% du seuil
     
     if est_prec_alerte:
         # Maintien de l'alerte tant qu'on n'est pas redescendu sous le seuil d'hystérésis

@@ -33,6 +33,8 @@ venv/
 **/data/redis/
 *.sqlite
 *.db
+*.db-shm
+*.db-wal
 
 # --- Éditeurs et systèmes ---
 .vscode/*

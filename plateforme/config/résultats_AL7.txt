@@ -1,0 +1,93 @@
+==================================================
+       RAPPORT DE VALIDATION DES SCÉNARIOS AL7
+==================================================
+
+Scénario : NORMAL
+--------------------------------------------------
+  * [NORMAL] Site:ST-VIG-01 (Node 1) | Hauteur:30mm / Seuil:300mm | Tendance:stable | Vitesse:0.0mm/h | Temps avant dépassement:Nonemin | Cause:None | Reçu le:2026-11-18T01:43:36.132Z
+  * [NORMAL] Site:ST-VIG-01 (Node 1) | Hauteur:30mm / Seuil:300mm | Tendance:stable | Vitesse:0.0mm/h | Temps avant dépassement:Nonemin | Cause:None | Reçu le:2026-11-18T02:13:36.132Z
+  * [NORMAL] Site:ST-VIG-01 (Node 1) | Hauteur:30mm / Seuil:300mm | Tendance:stable | Vitesse:0.0mm/h | Temps avant dépassement:Nonemin | Cause:None | Reçu le:2026-11-18T02:43:36.132Z
+  * [NORMAL] Site:ST-VIG-01 (Node 1) | Hauteur:31mm / Seuil:300mm | Tendance:montante | Vitesse:2.0mm/h | Temps avant dépassement:8070.0min | Cause:None | Reçu le:2026-11-18T03:13:36.132Z
+  * [NORMAL] Site:ST-VIG-01 (Node 1) | Hauteur:32mm / Seuil:300mm | Tendance:montante | Vitesse:2.0mm/h | Temps avant dépassement:8040.0min | Cause:None | Reçu le:2026-11-18T03:43:36.132Z
+  * [NORMAL] Site:ST-VIG-01 (Node 1) | Hauteur:33mm / Seuil:300mm | Tendance:montante | Vitesse:2.0mm/h | Temps avant dépassement:8010.0min | Cause:None | Reçu le:2026-11-18T04:13:36.132Z
+  * [NORMAL] Site:ST-VIG-01 (Node 1) | Hauteur:31mm / Seuil:300mm | Tendance:descendante | Vitesse:-4.0mm/h | Temps avant dépassement:Nonemin | Cause:None | Reçu le:2026-11-18T04:43:36.132Z
+  * [NORMAL] Site:ST-VIG-01 (Node 1) | Hauteur:32mm / Seuil:300mm | Tendance:montante | Vitesse:2.0mm/h | Temps avant dépassement:8040.0min | Cause:None | Reçu le:2026-11-18T05:13:36.132Z
+
+Scénario : MONTEE
+--------------------------------------------------
+  * [NORMAL] Site:ST-VIG-02 (Node 2) | Hauteur:30mm / Seuil:300mm | Tendance:stable | Vitesse:0.0mm/h | Temps avant dépassement:Nonemin | Cause:None | Reçu le:2026-11-17T21:13:55.158Z
+  * [NORMAL] Site:ST-VIG-02 (Node 2) | Hauteur:65mm / Seuil:300mm | Tendance:montante | Vitesse:70.0mm/h | Temps avant dépassement:201.4min | Cause:None | Reçu le:2026-11-17T21:43:55.158Z
+  * [NORMAL] Site:ST-VIG-02 (Node 2) | Hauteur:100mm / Seuil:300mm | Tendance:montante | Vitesse:70.0mm/h | Temps avant dépassement:171.4min | Cause:None | Reçu le:2026-11-17T22:13:55.158Z
+  * [NORMAL] Site:ST-VIG-02 (Node 2) | Hauteur:136mm / Seuil:300mm | Tendance:montante | Vitesse:72.0mm/h | Temps avant dépassement:136.7min | Cause:None | Reçu le:2026-11-17T22:43:55.158Z
+  * [NORMAL] Site:ST-VIG-02 (Node 2) | Hauteur:172mm / Seuil:300mm | Tendance:montante | Vitesse:72.0mm/h | Temps avant dépassement:106.7min | Cause:None | Reçu le:2026-11-17T23:13:55.158Z
+  * [NORMAL] Site:ST-VIG-02 (Node 2) | Hauteur:208mm / Seuil:300mm | Tendance:montante | Vitesse:72.0mm/h | Temps avant dépassement:76.7min | Cause:None | Reçu le:2026-11-17T23:43:55.158Z
+  * [NORMAL] Site:ST-VIG-02 (Node 2) | Hauteur:241mm / Seuil:300mm | Tendance:montante | Vitesse:66.0mm/h | Temps avant dépassement:53.6min | Cause:None | Reçu le:2026-11-18T00:13:55.158Z
+  * [NORMAL] Site:ST-VIG-02 (Node 2) | Hauteur:277mm / Seuil:300mm | Tendance:montante | Vitesse:72.0mm/h | Temps avant dépassement:19.2min | Cause:None | Reçu le:2026-11-18T00:43:55.158Z
+
+Scénario : MONTEE_RAPIDE
+--------------------------------------------------
+  * [NORMAL] Site:ST-VIG-03 (Node 3) | Hauteur:30mm / Seuil:300mm | Tendance:stable | Vitesse:0.0mm/h | Temps avant dépassement:Nonemin | Cause:None | Reçu le:2026-11-18T03:44:14.177Z
+  * [NORMAL] Site:ST-VIG-03 (Node 3) | Hauteur:30mm / Seuil:300mm | Tendance:stable | Vitesse:0.0mm/h | Temps avant dépassement:Nonemin | Cause:None | Reçu le:2026-11-18T04:14:14.177Z
+  * [NORMAL] Site:ST-VIG-03 (Node 3) | Hauteur:30mm / Seuil:300mm | Tendance:stable | Vitesse:0.0mm/h | Temps avant dépassement:Nonemin | Cause:None | Reçu le:2026-11-18T04:44:14.177Z
+  * [NORMAL] Site:ST-VIG-03 (Node 3) | Hauteur:151mm / Seuil:300mm | Tendance:montante | Vitesse:242.0mm/h | Temps avant dépassement:36.9min | Cause:None | Reçu le:2026-11-18T05:14:14.177Z
+  * [ALERTE] Site:ST-VIG-03 (Node 3) | Hauteur:272mm / Seuil:300mm | Tendance:montante | Vitesse:242.0mm/h | Temps avant dépassement:6.9min | Cause:montee_rapide | Reçu le:2026-11-18T05:44:14.177Z
+  * [ALERTE] Site:ST-VIG-03 (Node 3) | Hauteur:393mm / Seuil:300mm | Tendance:montante | Vitesse:242.0mm/h | Temps avant dépassement:Nonemin | Cause:seuil | Reçu le:2026-11-18T06:14:14.177Z
+  * [ALERTE] Site:ST-VIG-03 (Node 3) | Hauteur:511mm / Seuil:300mm | Tendance:montante | Vitesse:236.0mm/h | Temps avant dépassement:Nonemin | Cause:seuil | Reçu le:2026-11-18T06:44:14.177Z
+  * [ALERTE] Site:ST-VIG-03 (Node 3) | Hauteur:632mm / Seuil:300mm | Tendance:montante | Vitesse:242.0mm/h | Temps avant dépassement:Nonemin | Cause:seuil | Reçu le:2026-11-18T07:14:14.177Z
+
+Scénario : PIC
+--------------------------------------------------
+  * [NORMAL] Site:ST-VIG-04 (Node 4) | Hauteur:30mm / Seuil:300mm | Tendance:stable | Vitesse:0.0mm/h | Temps avant dépassement:Nonemin | Cause:None | Reçu le:2026-11-18T02:44:33.192Z
+  * [NORMAL] Site:ST-VIG-04 (Node 4) | Hauteur:30mm / Seuil:300mm | Tendance:stable | Vitesse:0.0mm/h | Temps avant dépassement:Nonemin | Cause:None | Reçu le:2026-11-18T03:14:33.192Z
+  * [NORMAL] Site:ST-VIG-04 (Node 4) | Hauteur:30mm / Seuil:300mm | Tendance:stable | Vitesse:0.0mm/h | Temps avant dépassement:Nonemin | Cause:None | Reçu le:2026-11-18T03:44:33.192Z
+  * [NORMAL] Site:ST-VIG-04 (Node 4) | Hauteur:31mm / Seuil:300mm | Tendance:montante | Vitesse:2.0mm/h | Temps avant dépassement:8070.0min | Cause:None | Reçu le:2026-11-18T04:14:33.192Z
+  * [NORMAL] Site:ST-VIG-04 (Node 4) | Hauteur:32mm / Seuil:300mm | Tendance:montante | Vitesse:2.0mm/h | Temps avant dépassement:8040.0min | Cause:None | Reçu le:2026-11-18T04:44:33.192Z
+  * [ALERTE] Site:ST-VIG-04 (Node 4) | Hauteur:500mm / Seuil:300mm | Tendance:montante | Vitesse:936.0mm/h | Temps avant dépassement:Nonemin | Cause:seuil | Reçu le:2026-11-18T05:14:33.192Z
+  * [NORMAL] Site:ST-VIG-04 (Node 4) | Hauteur:31mm / Seuil:300mm | Tendance:descendante | Vitesse:-938.0mm/h | Temps avant dépassement:Nonemin | Cause:None | Reçu le:2026-11-18T05:44:33.192Z
+  * [NORMAL] Site:ST-VIG-04 (Node 4) | Hauteur:32mm / Seuil:300mm | Tendance:montante | Vitesse:2.0mm/h | Temps avant dépassement:8040.0min | Cause:None | Reçu le:2026-11-18T06:14:33.192Z
+
+Scénario : TRAME_PERDUE
+--------------------------------------------------
+  * [NORMAL] Site:ST-VIG-05 (Node 5) | Hauteur:30mm / Seuil:300mm | Tendance:stable | Vitesse:0.0mm/h | Temps avant dépassement:Nonemin | Cause:None | Reçu le:2026-11-18T02:44:52.207Z
+  * [NORMAL] Site:ST-VIG-05 (Node 5) | Hauteur:30mm / Seuil:300mm | Tendance:stable | Vitesse:0.0mm/h | Temps avant dépassement:Nonemin | Cause:None | Reçu le:2026-11-18T03:14:52.207Z
+  * [NORMAL] Site:ST-VIG-05 (Node 5) | Hauteur:30mm / Seuil:300mm | Tendance:stable | Vitesse:0.0mm/h | Temps avant dépassement:Nonemin | Cause:None | Reçu le:2026-11-18T03:44:52.207Z
+  * [NORMAL] Site:ST-VIG-05 (Node 5) | Hauteur:31mm / Seuil:300mm | Tendance:montante | Vitesse:2.0mm/h | Temps avant dépassement:8070.0min | Cause:None | Reçu le:2026-11-18T04:14:52.207Z
+  * [NORMAL] Site:ST-VIG-05 (Node 5) | Hauteur:32mm / Seuil:300mm | Tendance:montante | Vitesse:0.5mm/h | Temps avant dépassement:32160.0min | Cause:None | Reçu le:2026-11-18T06:14:52.207Z
+
+Scénario : DOUBLON
+--------------------------------------------------
+  * [NORMAL] Site:ST-VIG-06 (Node 6) | Hauteur:30mm / Seuil:300mm | Tendance:stable | Vitesse:0.0mm/h | Temps avant dépassement:Nonemin | Cause:None | Reçu le:2026-11-18T04:45:11.229Z
+  * [NORMAL] Site:ST-VIG-06 (Node 6) | Hauteur:30mm / Seuil:300mm | Tendance:stable | Vitesse:0.0mm/h | Temps avant dépassement:Nonemin | Cause:None | Reçu le:2026-11-18T05:15:11.229Z
+  * [NORMAL] Site:ST-VIG-06 (Node 6) | Hauteur:30mm / Seuil:300mm | Tendance:stable | Vitesse:0.0mm/h | Temps avant dépassement:Nonemin | Cause:None | Reçu le:2026-11-18T05:45:11.229Z
+  * [NORMAL] Site:ST-VIG-06 (Node 6) | Hauteur:31mm / Seuil:300mm | Tendance:montante | Vitesse:2.0mm/h | Temps avant dépassement:8070.0min | Cause:None | Reçu le:2026-11-18T06:15:11.229Z
+  * [NORMAL] Site:ST-VIG-06 (Node 6) | Hauteur:32mm / Seuil:300mm | Tendance:montante | Vitesse:2.0mm/h | Temps avant dépassement:8040.0min | Cause:None | Reçu le:2026-11-18T06:45:11.229Z
+  * [NORMAL] Site:ST-VIG-06 (Node 6) | Hauteur:33mm / Seuil:300mm | Tendance:montante | Vitesse:2.0mm/h | Temps avant dépassement:8010.0min | Cause:None | Reçu le:2026-11-18T07:15:11.229Z
+
+Scénario : CAPTEUR_MUET
+--------------------------------------------------
+  * [NORMAL] Site:ST-VIG-07 (Node 7) | Hauteur:30mm / Seuil:300mm | Tendance:stable | Vitesse:0.0mm/h | Temps avant dépassement:Nonemin | Cause:None | Reçu le:2026-11-18T05:15:26.616Z
+  * [NORMAL] Site:ST-VIG-07 (Node 7) | Hauteur:30mm / Seuil:300mm | Tendance:stable | Vitesse:0.0mm/h | Temps avant dépassement:Nonemin | Cause:None | Reçu le:2026-11-18T05:45:26.616Z
+  * [NORMAL] Site:ST-VIG-07 (Node 7) | Hauteur:30mm / Seuil:300mm | Tendance:stable | Vitesse:0.0mm/h | Temps avant dépassement:Nonemin | Cause:None | Reçu le:2026-11-18T06:15:26.616Z
+  * [NORMAL] Site:ST-VIG-07 (Node 7) | Hauteur:31mm / Seuil:300mm | Tendance:montante | Vitesse:2.0mm/h | Temps avant dépassement:8070.0min | Cause:None | Reçu le:2026-11-18T06:45:26.616Z
+  * [NORMAL] Site:ST-VIG-07 (Node 7) | Hauteur:32mm / Seuil:300mm | Tendance:montante | Vitesse:2.0mm/h | Temps avant dépassement:8040.0min | Cause:None | Reçu le:2026-11-18T07:15:26.616Z
+
+Scénario : MESURE_INVALIDE
+--------------------------------------------------
+  * [NORMAL] Site:ST-VIG-08 (Node 8) | Hauteur:30mm / Seuil:300mm | Tendance:stable | Vitesse:0.0mm/h | Temps avant dépassement:Nonemin | Cause:None | Reçu le:2026-11-18T03:45:39.993Z
+  * [NORMAL] Site:ST-VIG-08 (Node 8) | Hauteur:30mm / Seuil:300mm | Tendance:stable | Vitesse:0.0mm/h | Temps avant dépassement:Nonemin | Cause:None | Reçu le:2026-11-18T04:15:39.993Z
+  * [NORMAL] Site:ST-VIG-08 (Node 8) | Hauteur:30mm / Seuil:300mm | Tendance:stable | Vitesse:0.0mm/h | Temps avant dépassement:Nonemin | Cause:None | Reçu le:2026-11-18T04:45:39.993Z
+  * [NORMAL] Site:ST-VIG-08 (Node 8) | Hauteur:33mm / Seuil:300mm | Tendance:montante | Vitesse:2.0mm/h | Temps avant dépassement:8010.0min | Cause:None | Reçu le:2026-11-18T06:15:39.993Z
+  * [NORMAL] Site:ST-VIG-08 (Node 8) | Hauteur:31mm / Seuil:300mm | Tendance:descendante | Vitesse:-4.0mm/h | Temps avant dépassement:Nonemin | Cause:None | Reçu le:2026-11-18T06:45:39.993Z
+  * [NORMAL] Site:ST-VIG-08 (Node 8) | Hauteur:32mm / Seuil:300mm | Tendance:montante | Vitesse:2.0mm/h | Temps avant dépassement:8040.0min | Cause:None | Reçu le:2026-11-18T07:15:39.993Z
+
+Scénario : BATTERIE_FAIBLE
+--------------------------------------------------
+  * [NORMAL] Site:ST-VIG-09 (Node 9) | Hauteur:30mm / Seuil:300mm | Tendance:stable | Vitesse:0.0mm/h | Temps avant dépassement:Nonemin | Cause:None | Reçu le:2026-11-18T02:15:59.022Z
+  * [NORMAL] Site:ST-VIG-09 (Node 9) | Hauteur:30mm / Seuil:300mm | Tendance:stable | Vitesse:0.0mm/h | Temps avant dépassement:Nonemin | Cause:None | Reçu le:2026-11-18T02:45:59.022Z
+  * [NORMAL] Site:ST-VIG-09 (Node 9) | Hauteur:30mm / Seuil:300mm | Tendance:stable | Vitesse:0.0mm/h | Temps avant dépassement:Nonemin | Cause:None | Reçu le:2026-11-18T03:15:59.022Z
+  * [NORMAL] Site:ST-VIG-09 (Node 9) | Hauteur:31mm / Seuil:300mm | Tendance:montante | Vitesse:2.0mm/h | Temps avant dépassement:8070.0min | Cause:None | Reçu le:2026-11-18T03:45:59.022Z
+  * [NORMAL] Site:ST-VIG-09 (Node 9) | Hauteur:32mm / Seuil:300mm | Tendance:montante | Vitesse:2.0mm/h | Temps avant dépassement:8040.0min | Cause:None | Reçu le:2026-11-18T04:15:59.022Z
+  * [NORMAL] Site:ST-VIG-09 (Node 9) | Hauteur:33mm / Seuil:300mm | Tendance:montante | Vitesse:2.0mm/h | Temps avant dépassement:8010.0min | Cause:None | Reçu le:2026-11-18T04:45:59.022Z
+  * [NORMAL] Site:ST-VIG-09 (Node 9) | Hauteur:31mm / Seuil:300mm | Tendance:descendante | Vitesse:-4.0mm/h | Temps avant dépassement:Nonemin | Cause:None | Reçu le:2026-11-18T05:15:59.022Z
+  * [NORMAL] Site:ST-VIG-09 (Node 9) | Hauteur:32mm / Seuil:300mm | Tendance:montante | Vitesse:2.0mm/h | Temps avant dépassement:8040.0min | Cause:None | Reçu le:2026-11-18T05:45:59.022Z
+

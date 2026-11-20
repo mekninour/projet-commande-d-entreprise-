@@ -7,8 +7,8 @@ Deux formats de publication :
   brut       (par défaut) ce que publiera le récepteur LoRa point à point en V1 :
              la trame en hexadécimal + l'heure de réception + la qualité du signal.
              Topic : pce92/uplink
-  chirpstack l'ancien format ChirpStack v4 (event/up), décodé par le codec S1.
-             Gardé au cas où la chaîne repasse en LoRaWAN.
+  chirpstack le format ChirpStack v4 (event/up) du LoRaWAN privé, validé par le client.
+             Topic : application/<app-id>/device/<dev-eui>/event/up
 
 Exemples :
   python injecteur.py --liste
@@ -101,7 +101,7 @@ def message_brut(octets, recu_a, rng):
 
 
 def message_chirpstack(args, octets, recu_a, decodage, rng):
-    """Format event/up de ChirpStack v4 (si la chaîne repasse en LoRaWAN)."""
+    """Format event/up de ChirpStack v4 (LoRaWAN privé)."""
     message = {
         "deduplicationId": str(uuid.uuid4()),
         "time": recu_a,
@@ -192,7 +192,7 @@ def lire_arguments():
     p.add_argument("--scenario", choices=sorted(SCENARIOS), help="scénario à rejouer")
     p.add_argument("--liste", action="store_true", help="affiche les scénarios disponibles")
     p.add_argument("--format", choices=["brut", "chirpstack"], default="brut",
-                   help="brut = récepteur LoRa point à point (V1, défaut) ; chirpstack = ancien format LoRaWAN")
+                   help="brut = récepteur LoRa point à point (défaut) ; chirpstack = uplink ChirpStack (LoRaWAN privé)")
     p.add_argument("--hote", default="localhost", help="broker MQTT (défaut : localhost)")
     p.add_argument("--port", type=int, default=1883)
     p.add_argument("--node-id", type=int, default=3, help="node_id écrit dans la trame (identifie le site)")

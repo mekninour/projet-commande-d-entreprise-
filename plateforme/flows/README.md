@@ -11,15 +11,27 @@
 ## S2 – Réception des trames
 
 ```
-pce92/uplink ──► 1. Décoder (codec S1) ──► 2. Contrôler seq ──► pce92/mesures/<node_id>
- (trame brute)          │ rejet                   │ doublon, pertes
+pce92/uplink ─────────────────────────┐
+ (trame brute, point à point)         ▼
+application/+/device/+/event/up ──► 0. Lire ChirpStack ──► 1. Décoder (codec S1) ──► 2. Contrôler seq ──► pce92/mesures/<node_id>
+ (uplink ChirpStack, LoRaWAN privé)                              │ rejet                   │ doublon, pertes
                         └─────────────┬───────────┘
                                       ▼
                                pce92/evenements
 ```
 
-**Entrée** : le topic `pce92/uplink`, publié par le récepteur LoRa (ou par l'injecteur S5) :
-`{ "received_at", "payload_hex", "rssi", "snr", "source" }`.
+**Entrées** : deux topics, traités de la même façon à partir de l'étape 1.
+- `pce92/uplink`, publié par un récepteur LoRa point à point (ou par l'injecteur S5) :
+  `{ "received_at", "payload_hex", "rssi", "snr", "source" }`.
+- `application/+/device/+/event/up`, publié par **ChirpStack** (LoRaWAN privé, validé par le client).
+
+**Étape 0 – Lire ChirpStack.** L'uplink ChirpStack est remis au format ci-dessus :
+- `payload_hex` : le champ `data` (base64) converti en hexadécimal. Le champ `object` (rempli si le codec est aussi installé dans ChirpStack) est ignoré : la trame est décodée une seule fois, par le même codec S1, quelle que soit la voie ;
+- `received_at` : l'heure de la passerelle (`time`, ou `gwTime`), sinon celle du serveur ChirpStack (`nsTime`), sinon celle de Node-RED (règle 4) ;
+- `rssi`, `snr` : la meilleure réception de `rxInfo`. ChirpStack a déjà supprimé les réceptions en double entre passerelles ;
+- `source` : `chirpstack`, plus `dev_eui` et `fcnt` pour le diagnostic.
+
+**À régler dans ChirpStack (A3-A5)** : l'intégration MQTT doit publier en **JSON** (`json=true` dans la section `[integration.mqtt]` de `chirpstack.toml` ; c'est déjà le réglage de `chirpstack-docker`, à vérifier sur le Pi), sur le broker auquel Node-RED est abonné.
 
 **Étape 1 – Décoder.** La trame est décodée avec `trame/decodeur/codec.js`, le même code que celui des tests S1. On obtient une **mesure normalisée** :
 
@@ -68,14 +80,14 @@ Le chemin s'écrit avec des `/`, même sous Windows. Redémarrer ensuite Node-RE
 
 **2. Importer le flux** : menu ☰ → *Import* → *select a file to import* → `s2_reception.json` → *Import*, puis **Deploy**.
 
-**3. Tester avec l'injecteur** (Mosquitto lancé), depuis `plateforme/injecteur` :
+**3. Tester avec l'injecteur** (Mosquitto lancé), depuis `plateforme/injecteur`. Chaque scénario marche aussi en LoRaWAN avec `--format chirpstack` (même résultat, `source` = `chirpstack`) :
 - `py injecteur.py --scenario trame_perdue` : 3 événements `trames_perdues` ;
 - `py injecteur.py --scenario doublon` : 1 événement `doublon` en retard (seq 4) ;
 - `py injecteur.py --scenario retransmission_differee` : 3 trames perdues, puis 1 doublon en retard (seq 4) et 3 événements `trame_en_retard` (seq 5 à 7). Les seq 5 à 7 n'apparaissent pas dans les mesures.
 
 Les événements s'affichent dans l'onglet debug de Node-RED, et dans la vue technique.
 
-**4. Tests sans Node-RED** : `node test_s2.js`, depuis ce dossier. Le test lit les deux fonctions de `s2_reception.json` et les exécute sur des suites de trames (pertes, doublons immédiats et en retard, trames en retard, redémarrage du nœud).
+**4. Tests sans Node-RED** : `node test_s2.js`, depuis ce dossier. Le test lit les fonctions de `s2_reception.json` et les exécute sur des suites de trames (pertes, doublons immédiats et en retard, trames en retard, redémarrage du nœud) et sur des uplinks ChirpStack.
 
 ## S3 – Stockage de l'historique
 

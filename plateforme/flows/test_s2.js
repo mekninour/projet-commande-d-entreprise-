@@ -4,6 +4,7 @@
 // Le test lit les deux fonctions du flux s2_reception.json (« 1. Décoder » et
 // « 2. Contrôler seq ») et les exécute comme Node-RED, sur des suites de trames :
 // pertes, doublon immédiat, doublon en retard, trames en retard, redémarrage du nœud.
+// Il lit aussi « 0. Lire ChirpStack » et vérifie qu'un uplink LoRaWAN donne la même mesure.
 
 const fs = require("fs");
 const path = require("path");
@@ -13,6 +14,7 @@ const flux = JSON.parse(fs.readFileSync(path.join(__dirname, "s2_reception.json"
 const code = nom => flux.find(n => n.type === "function" && n.name.startsWith(nom)).func;
 const decoder = new Function("msg", "node", "flow", "global", code("1."));
 const controler = new Function("msg", "node", "flow", "global", code("2."));
+const lireChirpstack = new Function("msg", "node", "flow", "global", "Buffer", code("0."));
 
 let reussis = 0, echecs = 0;
 function verifier(nom, condition, detail) {
@@ -92,6 +94,43 @@ longue.push([5, 30]);
 r = suite(longue);
 verifier("seq 5 qui revient 75 trames plus tard : trop ancienne, traitée comme un redémarrage",
          r[80].mesure && r[80].evt.type === "retour_seq");
+
+console.log("Uplinks ChirpStack (LoRaWAN privé)");
+{
+    const memoire = {};
+    const flow = { get: k => memoire[k], set: (k, v) => { memoire[k] = v; } };
+    const global = { get: k => (k === "codec" ? codec : undefined) };
+    const node = { status() {}, warn() {}, error() {} };
+    // Trame officielle du contrat v1.2 : nœud 3, 268 mm, 3,30 V, seq 4660, alerte levée, 30 min.
+    const octets = Buffer.from("0003010CA0123401001E0000", "hex");
+    const up = {
+        deduplicationId: "x", time: "2026-11-20T10:00:00.000Z",
+        deviceInfo: { devEui: "0000000000000001", deviceName: "noeud-3" },
+        fPort: 1, fCnt: 17, data: octets.toString("base64"),
+        object: { water_mm: 9999 },
+        rxInfo: [{ rssi: -110, snr: 2.5 }, { rssi: -95, snr: 6.0 }]
+    };
+    const entree = lireChirpstack({ payload: up }, node, flow, global, Buffer).payload;
+    verifier("data (base64) -> payload_hex", entree.payload_hex === "0003010CA0123401001E0000", entree.payload_hex);
+    verifier("meilleure réception gardée (RSSI −95, SNR 6)", entree.rssi === -95 && entree.snr === 6);
+    verifier("heure de réception = time de ChirpStack", entree.received_at === "2026-11-20T10:00:00.000Z");
+    verifier("source chirpstack, devEui et fCnt gardés",
+             entree.source === "chirpstack" && entree.dev_eui === "0000000000000001" && entree.fcnt === 17);
+    const [mesure] = decoder({ payload: entree }, node, flow, global);
+    verifier("décodée par le codec S1, pas par « object » : 268 mm, nœud 3, seq 4660",
+             mesure && mesure.payload.water_mm === 268 && mesure.payload.node_id === 3 && mesure.payload.seq === 4660
+             && mesure.topic === "pce92/mesures/3");
+    const [acceptee] = controler(mesure, node, flow, global);
+    verifier("puis contrôlée comme une trame point à point", acceptee && acceptee.payload.seq === 4660);
+
+    const sansHeure = lireChirpstack({ payload: Object.assign({}, up, { time: undefined,
+        rxInfo: [{ rssi: -100, snr: 1, nsTime: "2026-11-20T10:00:01.000Z" }] }) }, node, flow, global, Buffer).payload;
+    verifier("sans time : heure du serveur ChirpStack (nsTime)", sansHeure.received_at === "2026-11-20T10:00:01.000Z");
+    const vide = lireChirpstack({ payload: Object.assign({}, up, { data: undefined }) }, node, flow, global, Buffer).payload;
+    const [m2, rejet] = decoder({ payload: vide }, node, flow, global);
+    verifier("uplink sans données : rejeté (événement rejet)", !m2 && rejet.payload.type === "rejet"
+             && rejet.payload.source === "chirpstack");
+}
 
 console.log("\n" + reussis + " réussi(s), " + echecs + " échec(s)");
 process.exit(echecs ? 1 : 0);

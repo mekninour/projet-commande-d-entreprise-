@@ -25,7 +25,7 @@ Par défaut (`--format brut`), l'injecteur publie ce que publiera le **récepteu
 
 **Ce format est une proposition de B1** pour le récepteur, à valider avec Amine. Le décodage se fait ensuite dans Node-RED, avec `trame/decodeur/codec.js`.
 
-`--format chirpstack` publie à la place l'ancien format ChirpStack v4 (`application/.../event/up`, décodé par le codec S1). Il est gardé au cas où la chaîne repasserait en LoRaWAN.
+`--format chirpstack` publie à la place un uplink ChirpStack v4 (`application/<app-id>/device/<dev-eui>/event/up`), comme le fera la vraie chaîne en LoRaWAN privé, validé par le client. La réception S2 lit les deux formats.
 
 ## Prérequis
 

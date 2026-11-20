@@ -4,7 +4,7 @@
     "type": "tab",
     "label": "S2 – Réception des trames",
     "disabled": false,
-    "info": "Tâche S2 (B1). pce92/uplink -> décodage (codec S1) -> contrôle seq -> pce92/mesures/<node_id> et pce92/evenements.\nVoir plateforme/flows/README.md."
+    "info": "Tâche S2 (B1). Deux entrées : pce92/uplink (récepteur point à point, injecteur) et application/+/device/+/event/up (ChirpStack, LoRaWAN privé) -> décodage (codec S1) -> contrôle seq -> pce92/mesures/<node_id> et pce92/evenements.\nVoir plateforme/flows/README.md."
   },
   {
     "id": "a1b2c3d4e5f60002",
@@ -27,7 +27,7 @@
     "id": "a1b2c3d4e5f60010",
     "type": "comment",
     "z": "a1b2c3d4e5f60001",
-    "name": "S2 : trame brute -> mesure normalisée (contrat v1.2)",
+    "name": "S2 : trame brute ou uplink ChirpStack -> mesure normalisée (contrat v1.2)",
     "info": "",
     "x": 230,
     "y": 40,
@@ -37,7 +37,7 @@
     "id": "a1b2c3d4e5f60011",
     "type": "mqtt in",
     "z": "a1b2c3d4e5f60001",
-    "name": "Trames reçues",
+    "name": "Trames reçues (point à point)",
     "topic": "pce92/uplink",
     "qos": "1",
     "datatype": "json",
@@ -55,11 +55,52 @@
     ]
   },
   {
+    "id": "a1b2c3d4e5f60014",
+    "type": "mqtt in",
+    "z": "a1b2c3d4e5f60001",
+    "name": "Uplinks ChirpStack (LoRaWAN)",
+    "topic": "application/+/device/+/event/up",
+    "qos": "1",
+    "datatype": "json",
+    "broker": "a1b2c3d4e5f60002",
+    "nl": false,
+    "rap": true,
+    "rh": 0,
+    "inputs": 0,
+    "x": 150,
+    "y": 180,
+    "wires": [
+      [
+        "a1b2c3d4e5f60015"
+      ]
+    ]
+  },
+  {
+    "id": "a1b2c3d4e5f60015",
+    "type": "function",
+    "z": "a1b2c3d4e5f60001",
+    "name": "0. Lire ChirpStack",
+    "func": "// S2 – Étape 0 : lire un uplink ChirpStack v4 (LoRaWAN privé) et le mettre au même format\n// que le récepteur point à point, pour que la suite du flux (étapes 1 et 2) soit commune.\n// Entrée : message JSON publié par ChirpStack sur application/<id>/device/<devEui>/event/up\n//   { deduplicationId, time, deviceInfo { devEui, deviceName }, fPort, fCnt, data (base64),\n//     object (si le codec est installé dans ChirpStack), rxInfo [ { rssi, snr, gwTime, nsTime, … } ] }\n// Sortie : { received_at, payload_hex, rssi, snr, source, dev_eui, fcnt } vers « 1. Décoder ».\n// La trame est toujours décodée ici par le codec S1, même si ChirpStack a déjà rempli « object » :\n// un seul décodage, le même pour les deux voies.\nconst up = msg.payload || {};\nconst rx = Array.isArray(up.rxInfo) ? up.rxInfo : [];\n// ChirpStack a déjà supprimé les réceptions en double (plusieurs passerelles) : rxInfo les liste.\n// On garde la meilleure réception (RSSI le plus fort).\nconst meilleure = rx.reduce((m, r) => (m === null || (r.rssi ?? -999) > (m.rssi ?? -999) ? r : m), null) || {};\n\n// Règle 4 du contrat : horodatage à la réception. On prend l'heure de la passerelle si elle\n// est connue (time, ou gwTime de la réception), sinon l'heure du serveur ChirpStack (nsTime),\n// sinon l'heure de Node-RED.\nconst recuA = up.time || meilleure.gwTime || meilleure.nsTime || new Date().toISOString();\n\nlet hex = null;\nif (typeof up.data === \"string\" && up.data.length) {\n    hex = Buffer.from(up.data, \"base64\").toString(\"hex\").toUpperCase();\n}\nconst devEui = (up.deviceInfo && up.deviceInfo.devEui) || null;\n\nmsg.payload = {\n    received_at: recuA,\n    payload_hex: hex,            // null si l'uplink n'a pas de données : « 1. Décoder » le rejettera\n    rssi: meilleure.rssi ?? null,\n    snr: meilleure.snr ?? null,\n    source: \"chirpstack\",\n    dev_eui: devEui,\n    fcnt: up.fCnt ?? null\n};\nnode.status({ fill: hex ? \"green\" : \"yellow\", shape: \"dot\",\n              text: (devEui || \"appareil inconnu\") + (up.fCnt !== undefined ? \" · fCnt \" + up.fCnt : \"\") });\nreturn msg;\n",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 190,
+    "y": 240,
+    "wires": [
+      [
+        "a1b2c3d4e5f60012"
+      ]
+    ]
+  },
+  {
     "id": "a1b2c3d4e5f60012",
     "type": "function",
     "z": "a1b2c3d4e5f60001",
     "name": "1. Décoder (codec S1)",
-    "func": "// S2 – Étape 1 : décoder la trame brute et produire une mesure normalisée.\n// Entrée : message du récepteur (ou de l'injecteur) sur pce92/uplink\n//   { received_at, payload_hex, rssi, snr, source }\n// Sortie 1 : mesure normalisée. Sortie 2 : trame rejetée.\nconst codec = global.get(\"codec\");\nif (!codec) {\n    node.error(\"Codec S1 non chargé : ajouter codec dans functionGlobalContext (voir plateforme/flows/README.md)\");\n    node.status({ fill: \"red\", shape: \"ring\", text: \"codec absent\" });\n    return null;\n}\n\nconst entree = msg.payload || {};\nconst recuA = entree.received_at || new Date().toISOString(); // règle 4 : horodatage à la réception\n\nfunction rejet(raison) {\n    node.warn(\"Trame rejetée : \" + raison);\n    return [null, {\n        topic: \"pce92/evenements\",\n        payload: { type: \"rejet\", raison: raison, received_at: recuA,\n                   payload_hex: entree.payload_hex || null, source: entree.source || null }\n    }];\n}\n\nif (typeof entree.payload_hex !== \"string\") {\n    return rejet(\"message sans payload_hex\");\n}\nconst hex = entree.payload_hex.replace(/\\s+/g, \"\");\nif (!/^[0-9a-fA-F]*$/.test(hex) || hex.length % 2 !== 0) {\n    return rejet(\"payload_hex n'est pas de l'hexadécimal valide\");\n}\n\nconst octets = hex.match(/../g).map(h => parseInt(h, 16));\nconst res = codec.decodeUplink({ bytes: octets });\nif (res.errors) {\n    return rejet(res.errors.join(\" ; \"));\n}\n\nconst d = res.data;\nmsg.topic = \"pce92/mesures/\" + d.node_id;\nmsg.payload = {\n    node_id: d.node_id,\n    received_at: recuA,\n    water_mm: d.water_valid ? d.water_mm : null,  // null = mesure invalide (0xFFFF)\n    water_valid: d.water_valid,\n    batt_v: d.batt_v,                             // null = tension inconnue (0xFF)\n    seq: d.seq,\n    alert: d.alert,\n    next_min: d.next_min,                         // null = inconnu (0xFF)\n    expected_next_at: d.next_min === null ? null\n        : new Date(Date.parse(recuA) + d.next_min * 60000).toISOString(),\n    rssi: entree.rssi ?? null,\n    snr: entree.snr ?? null,\n    source: entree.source ?? null,\n    payload_hex: hex.toUpperCase(),\n    warnings: res.warnings\n};\nif (res.warnings.length) {\n    node.warn(\"Nœud \" + d.node_id + \", seq \" + d.seq + \" : \" + res.warnings.join(\" ; \"));\n}\nnode.status({ fill: d.alert ? \"red\" : \"green\", shape: \"dot\",\n              text: \"nœud \" + d.node_id + \" · seq \" + d.seq + \" · \" + (d.water_valid ? d.water_mm + \" mm\" : \"invalide\") });\nreturn [msg, null];\n",
+    "func": "// S2 – Étape 1 : décoder la trame brute et produire une mesure normalisée.\n// Entrée : message du récepteur (ou de l'injecteur) sur pce92/uplink, ou uplink ChirpStack\n// déjà remis à ce format par « 0. Lire ChirpStack » :\n//   { received_at, payload_hex, rssi, snr, source }\n// Sortie 1 : mesure normalisée. Sortie 2 : trame rejetée.\nconst codec = global.get(\"codec\");\nif (!codec) {\n    node.error(\"Codec S1 non chargé : ajouter codec dans functionGlobalContext (voir plateforme/flows/README.md)\");\n    node.status({ fill: \"red\", shape: \"ring\", text: \"codec absent\" });\n    return null;\n}\n\nconst entree = msg.payload || {};\nconst recuA = entree.received_at || new Date().toISOString(); // règle 4 : horodatage à la réception\n\nfunction rejet(raison) {\n    node.warn(\"Trame rejetée : \" + raison);\n    return [null, {\n        topic: \"pce92/evenements\",\n        payload: { type: \"rejet\", raison: raison, received_at: recuA,\n                   payload_hex: entree.payload_hex || null, source: entree.source || null }\n    }];\n}\n\nif (typeof entree.payload_hex !== \"string\") {\n    return rejet(\"message sans payload_hex\");\n}\nconst hex = entree.payload_hex.replace(/\\s+/g, \"\");\nif (!/^[0-9a-fA-F]*$/.test(hex) || hex.length % 2 !== 0) {\n    return rejet(\"payload_hex n'est pas de l'hexadécimal valide\");\n}\n\nconst octets = hex.match(/../g).map(h => parseInt(h, 16));\nconst res = codec.decodeUplink({ bytes: octets });\nif (res.errors) {\n    return rejet(res.errors.join(\" ; \"));\n}\n\nconst d = res.data;\nmsg.topic = \"pce92/mesures/\" + d.node_id;\nmsg.payload = {\n    node_id: d.node_id,\n    received_at: recuA,\n    water_mm: d.water_valid ? d.water_mm : null,  // null = mesure invalide (0xFFFF)\n    water_valid: d.water_valid,\n    batt_v: d.batt_v,                             // null = tension inconnue (0xFF)\n    seq: d.seq,\n    alert: d.alert,\n    next_min: d.next_min,                         // null = inconnu (0xFF)\n    expected_next_at: d.next_min === null ? null\n        : new Date(Date.parse(recuA) + d.next_min * 60000).toISOString(),\n    rssi: entree.rssi ?? null,\n    snr: entree.snr ?? null,\n    source: entree.source ?? null,\n    payload_hex: hex.toUpperCase(),\n    warnings: res.warnings\n};\nif (res.warnings.length) {\n    node.warn(\"Nœud \" + d.node_id + \", seq \" + d.seq + \" : \" + res.warnings.join(\" ; \"));\n}\nnode.status({ fill: d.alert ? \"red\" : \"green\", shape: \"dot\",\n              text: \"nœud \" + d.node_id + \" · seq \" + d.seq + \" · \" + (d.water_valid ? d.water_mm + \" mm\" : \"invalide\") });\nreturn [msg, null];\n",
     "outputs": 2,
     "timeout": 0,
     "noerr": 0,

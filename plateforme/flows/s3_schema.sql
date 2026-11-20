@@ -21,7 +21,7 @@ CREATE INDEX IF NOT EXISTS idx_mesures_capteur_heure ON mesures (node_id, receiv
 CREATE TABLE IF NOT EXISTS evenements (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     received_at TEXT NOT NULL,
-    type        TEXT NOT NULL,      -- trames_perdues, doublon, rejet, retour_seq
+    type        TEXT NOT NULL,      -- trames_perdues, doublon, trame_en_retard, rejet, retour_seq
     node_id     INTEGER,
     seq         INTEGER,
     details     TEXT                -- le message complet, en JSON

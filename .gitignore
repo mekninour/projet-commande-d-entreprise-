@@ -22,6 +22,7 @@ flows_cred.json
 node_modules/
 
 # --- Python ---
+.seq_injecteur.json
 __pycache__/
 *.pyc
 .venv/

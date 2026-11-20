@@ -37,20 +37,23 @@ pce92/uplink ──► 1. Décoder (codec S1) ──► 2. Contrôler seq ──
 
 Une trame illisible (pas de `payload_hex`, mauvaise longueur, `node_id` = 0) est **rejetée** et publiée sur `pce92/evenements`.
 
-**Étape 2 – Contrôler seq** (règle 5 du contrat), pour chaque nœud. L'écart vaut (seq − seq précédent) modulo 65536 :
+**Étape 2 – Contrôler seq** (règle 5 du contrat), pour chaque nœud. L'écart vaut (seq − dernier seq) modulo 65536 :
 - **1** : trame normale ;
 - **plus de 1** : des trames ont été perdues. La mesure est gardée, et un événement `trames_perdues` est publié ;
 - **0** : c'est un **doublon**. La mesure est écartée, et un événement `doublon` est publié ;
-- **plus de 32768** (choix B1, hors contrat) : le compteur est revenu en arrière, à cause d'un redémarrage du nœud ou d'une trame en retard. La mesure est gardée, et un événement `retour_seq` est publié.
+- **plus de 32768** : la trame est **plus ancienne** que la dernière reçue. Trois cas :
+  - ce seq a déjà été reçu, avec la même trame : **doublon arrivé en retard**. La mesure est écartée, et un événement `doublon` est publié avec `en_retard: true` ;
+  - ce seq avait été compté comme perdu : **trame reçue en retard** (le capteur renvoie ses mesures après une coupure radio). Elle n'est **pas** publiée sur `pce92/mesures` : le contrat v1.2 ne donne pas l'heure de mesure, et une ancienne mesure ne doit pas déclencher une alerte nouvelle (L1, annexe A). Elle est publiée dans un événement `trame_en_retard`, avec sa mesure et une **heure de mesure estimée** (dernière trame reçue − retard × `next_min`). Elle est donc gardée dans le journal des événements, et elle ne compte plus comme perdue ;
+  - sinon : **retour en arrière du compteur** (redémarrage du nœud, choix B1 hors contrat). La mesure est gardée, un événement `retour_seq` est publié, et la mémoire du nœud repart de cette trame.
 
-Le dernier seq de chaque nœud est gardé en mémoire par Node-RED. Il repart de zéro à chaque redémarrage de Node-RED, et la première trame suivante n'est alors pas contrôlée.
+Node-RED garde en mémoire, pour chaque nœud, le dernier seq, les **64 dernières trames reçues** et les seq perdus récents. Une trame plus ancienne que ces 64 trames est traitée comme un redémarrage. Cette mémoire repart de zéro à chaque redémarrage de Node-RED, et la première trame suivante n'est alors pas contrôlée.
 
 **Sorties**
 
 | Topic | Contenu | Utilisé par |
 |---|---|---|
 | `pce92/mesures/<node_id>` | les mesures acceptées | stockage (S3), moteur d'alerte (B2), tableaux de bord |
-| `pce92/evenements` | rejets, doublons, trames perdues, retours de seq | vue technique, diagnostic |
+| `pce92/evenements` | rejets, doublons (immédiats ou en retard), trames perdues, trames reçues en retard, retours de seq | stockage (S3), vue technique, diagnostic |
 
 ## Installation
 
@@ -65,9 +68,14 @@ Le chemin s'écrit avec des `/`, même sous Windows. Redémarrer ensuite Node-RE
 
 **2. Importer le flux** : menu ☰ → *Import* → *select a file to import* → `s2_reception.json` → *Import*, puis **Deploy**.
 
-**3. Tester avec l'injecteur** (Mosquitto lancé) : `py injecteur.py --scenario trame_perdue`, puis `--scenario doublon`. Les mesures apparaissent dans l'onglet debug de Node-RED, et les événements aussi (3 trames perdues, 1 doublon).
+**3. Tester avec l'injecteur** (Mosquitto lancé), depuis `plateforme/injecteur` :
+- `py injecteur.py --scenario trame_perdue` : 3 événements `trames_perdues` ;
+- `py injecteur.py --scenario doublon` : 1 événement `doublon` en retard (seq 4) ;
+- `py injecteur.py --scenario retransmission_differee` : 3 trames perdues, puis 1 doublon en retard (seq 4) et 3 événements `trame_en_retard` (seq 5 à 7). Les seq 5 à 7 n'apparaissent pas dans les mesures.
 
-Comme le dernier seq est mémorisé, relancer un scénario qui repart de seq 1 produit un événement `retour_seq` : c'est normal. Pour l'éviter, utiliser `--seq-depart` ou un autre `--node-id`.
+Les événements s'affichent dans l'onglet debug de Node-RED, et dans la vue technique.
+
+**4. Tests sans Node-RED** : `node test_s2.js`, depuis ce dossier. Le test lit les deux fonctions de `s2_reception.json` et les exécute sur des suites de trames (pertes, doublons immédiats et en retard, trames en retard, redémarrage du nœud).
 
 ## S3 – Stockage de l'historique
 

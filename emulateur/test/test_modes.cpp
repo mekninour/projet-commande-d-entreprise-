@@ -3,7 +3,7 @@
 // les décisions d'émission. Ne remplace PAS le rejeu E4, sert juste à tester.
 //
 // Compilation : g++ -std=c++11 -Iinclude src/modes.cpp tests/test_modes.cpp -o test_modes
-// Usage       : ./test_modes <naif|fixe|s4> scenario.csv [-v] [--seuil MM]
+// Usage       : ./test_modes <naif|fixe|s4|s4v1> scenario.csv [-v] [--seuil MM]
 //   -v          détaille chaque émission (heure, hauteur, période en vigueur)
 //   --seuil MM  seuil d'alerte absolu de S4 (par défaut 0 = seuil relatif)
 #include <stdio.h>
@@ -14,7 +14,7 @@
 int main(int argc, char** argv) {
     Mode mode;
     if (argc < 3 || !mode_depuis_texte(argv[1], mode)) {
-        fprintf(stderr, "Usage : %s <naif|fixe|s4> scenario.csv [-v] [--seuil MM]\n", argv[0]);
+        fprintf(stderr, "Usage : %s <naif|fixe|s4|s4v1> scenario.csv [-v] [--seuil MM]\n", argv[0]);
         return 1;
     }
     bool verbeux = false;
@@ -53,8 +53,8 @@ int main(int argc, char** argv) {
     }
     fclose(f);
 
-    printf("Mode %-4s : %u mesures (%u invalides) -> %u emissions (%.1f %%)\n",
-           nom_mode(mode), nb, nb_invalides, (unsigned)etat.nb_emissions,
-           nb ? 100.0 * etat.nb_emissions / nb : 0.0);
+    printf("Mode %-4s : %u points (%u invalides), %u mesures prises -> %u emissions (%.1f %%)\n",
+           nom_mode(mode), nb, nb_invalides, (unsigned)etat.nb_mesures,
+           (unsigned)etat.nb_emissions, nb ? 100.0 * etat.nb_emissions / nb : 0.0);
     return 0;
 }

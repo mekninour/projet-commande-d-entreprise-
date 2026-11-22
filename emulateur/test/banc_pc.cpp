@@ -10,19 +10,22 @@
 // Décisions appliquées : document « B3 – Décisions émulateur avant le 16/11 ».
 //
 // Usage :
-//   ./banc <scenario.csv> [naif|fixe|s4|tous] [--sf N] [--radio lorawan|p2p]
+//   ./banc <scenario.csv> [naif|fixe|s4|s4v1|tous] [--sf N] [--radio lorawan|p2p]
 //          [--reglage defaut|s4-regle|r3] [--periode-fixe S] [--s4-delta MM]
-//          [--s4-calme S] [--s4-alerte S] [--seuil MM] [--hex] [--entete]
+//          [--s4-calme S] [--s4-alerte S] [--seuil MM] [--regroupement]
+//          [--hex] [--entete]
 //   ./banc --test-v12      (vérifie la trame de test du contrat v1.2)
 //
-// Réglages nommés (--reglage) :
-//   defaut    valeurs par défaut de modes.h (S4 : calme 1 h, alerte 15 min,
-//             variation 50 mm)
-//   s4-regle  réglage présenté au client le 16/11 (S4 : calme 2 h,
-//             alerte 30 min, variation 100 mm)
-//   r3        hypothèses de la simulation R3 de Gaetan (S4 : calme 1 h,
-//             alerte 10 min, variation 100 mm)
+// Modes : naif, fixe, s4 (fidèle au L1), s4v1 (version simplifiée du 16/11).
+// Réglages nommés (--reglage), pour le mode s4v1 uniquement :
+//   defaut    calme 1 h, alerte 15 min, variation 50 mm
+//   s4-regle  réglage présenté au client le 16/11 : calme 2 h, alerte 30 min,
+//             variation 100 mm
+//   r3        hypothèses de la simulation R3 de Gaetan, alerte ramenée à 15 min
+//             comme au L1 : calme 1 h, alerte 15 min, variation 100 mm
 // Les options --s4-* placées après --reglage le complètent ou le modifient.
+// --regroupement : écrit dans les octets réservés 9 à 11 les écarts avec les
+// 3 mesures précédentes (proposition L1, hors contrat v1.2 : accord de Brest).
 // -----------------------------------------------------------------------------
 #include <stdio.h>
 #include <stdlib.h>
@@ -99,7 +102,7 @@ static bool appliquer_reglage(const char* nom, ParamsModes& p) {
     if (!strcmp(nom, "defaut")) { return true; }
     if (!strcmp(nom, "r3")) {           // hypothèses de la simulation R3 (Gaetan)
         p.s4_periode_calme_s  = 3600;   // 1 trame / h au calme
-        p.s4_periode_alerte_s = 600;    // 1 trame / 10 min en alerte
+        p.s4_periode_alerte_s = 900;    // 15 min (L1) au lieu de 10 min
         p.s4_delta_mm         = 100;    // envoi si l'eau varie de 10 cm
         return true;
     }
@@ -114,7 +117,8 @@ static bool appliquer_reglage(const char* nom, ParamsModes& p) {
 
 // --- Une campagne : un scénario, un mode --------------------------------------
 static void campagne(const std::vector<Mesure>& v, const char* scenario, Mode mode,
-                     const ParamsModes& p, uint8_t sf, uint8_t entete, bool hex) {
+                     const ParamsModes& p, uint8_t sf, uint8_t entete, bool hex,
+                     bool regroupement) {
     EtatMode e; init_etat(e, mode, p);
     Compteurs c; c.sf = sf; c.entete = entete;
     Temoin tem;
@@ -127,35 +131,42 @@ static void campagne(const std::vector<Mesure>& v, const char* scenario, Mode mo
         tem.voir(m, p);
         if (tem.en_alerte && !avant && t_franchi < 0) t_franchi = m.t_s;
 
-        if (!doit_emettre(m, e)) continue;           // D2 : toutes les mesures
+        if (!decider_emission(m, e)) continue;       // D2 : toutes les mesures
 
         // emettre(trame) : point d'émission unique (D1)
-        bool alerte = (mode == Mode::S4) ? e.en_alerte : tem.en_alerte;
+        bool s4 = (mode == Mode::S4 || mode == Mode::S4V1);
+        bool alerte = s4 ? e.en_alerte : tem.en_alerte;
         uint8_t trame[TAILLE_TRAME];
         seq = (uint16_t)(seq + 1);                    // D6 : seq géré à l'émission
         encoder_trame(NODE_ID, m.hauteur_mm, BATT_INCONNUE, seq,
                       alerte ? STATUS_ALERTE : 0, next_min_trame(e), trame);
+        if (regroupement && mode == Mode::S4 && m.valide()) {
+            int8_t ec[3];
+            ecarts_regroupement(e, m.hauteur_mm, ec);
+            for (int k = 0; k < 3; ++k) trame[9 + k] = (uint8_t)ec[k];
+        }
+        confirmer_envoi(m, e);                        // sur PC : envoi réussi
         c.emise(TAILLE_TRAME);
         if (alerte && t_franchi >= 0 && c.retard_alerte_s < 0)
             c.retard_alerte_s = (int32_t)(m.t_s - t_franchi);
 
         if (hex) {
-            fprintf(stderr, "%s %-4s t+%7lus ", scenario, nom_mode(mode),
-                    (unsigned long)m.t_s);
+            fprintf(stderr, "%s %-4s %-9s t+%7lus ", scenario, nom_mode(mode),
+                    mode == Mode::S4 ? nom_etat_s4(e.etat_s4) : "", (unsigned long)m.t_s);
             for (int k = 0; k < TAILLE_TRAME; ++k) fprintf(stderr, "%02X ", trame[k]);
             fprintf(stderr, "\n");
         }
     }
 
-    // Export (8 colonnes figées + retard_alerte_s). eveil_ms : 0 sur PC
-    // (mesuré avec millis() sur l'ESP32 seulement).
+    // Export : 8 colonnes figées + retard_alerte_s + mesures (mesures prises
+    // par le capteur). eveil_ms : 0 sur PC (millis() sur l'ESP32 seulement).
     time_t now = time(NULL); char ts[32];
     strftime(ts, sizeof ts, "%Y-%m-%dT%H:%M:%SZ", gmtime(&now));
     printf("%s,%s,%s,%u,%lu,%lu,%.1f,%lu,", ts, scenario, nom_mode(mode), c.sf,
            (unsigned long)c.trames, (unsigned long)c.octets, c.toa_ms,
            (unsigned long)c.eveil_ms);
     if (c.retard_alerte_s >= 0) printf("%ld", (long)c.retard_alerte_s);
-    printf("\n");
+    printf(",%lu\n", (unsigned long)e.nb_mesures);
 }
 
 static int test_v12() {
@@ -174,16 +185,17 @@ static int test_v12() {
 int main(int argc, char** argv) {
     if (argc >= 2 && strcmp(argv[1], "--test-v12") == 0) return test_v12();
     if (argc < 2) {
-        fprintf(stderr, "usage : %s <scenario.csv> [naif|fixe|s4|tous] [--sf N] "
+        fprintf(stderr, "usage : %s <scenario.csv> [naif|fixe|s4|s4v1|tous] [--sf N] "
                 "[--radio lorawan|p2p] [--reglage defaut|s4-regle|r3] [--periode-fixe S] "
-                "[--s4-delta MM] [--s4-calme S] [--s4-alerte S] [--seuil MM] [--hex] [--entete]\n"
+                "[--s4-delta MM] [--s4-calme S] [--s4-alerte S] [--seuil MM] [--regroupement] "
+                "[--hex] [--entete]\n"
                 "        %s --test-v12\n", argv[0], argv[0]);
         return 2;
     }
     const char* chemin = argv[1];
     const char* choix = "tous";
     uint8_t sf = 10, entete = ENTETE_LORAWAN;
-    bool hex = false, avec_entete = false;
+    bool hex = false, avec_entete = false, regroupement = false;
     ParamsModes p;                                  // fixe : 1800 s (D3, contrat)
 
     for (int i = 2; i < argc; ++i) {
@@ -209,6 +221,7 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "--s4-alerte") && i + 1 < argc)
             p.s4_periode_alerte_s = (uint32_t)atol(argv[++i]);
         else if (!strcmp(argv[i], "--hex")) hex = true;
+        else if (!strcmp(argv[i], "--regroupement")) regroupement = true;
         else if (!strcmp(argv[i], "--entete")) avec_entete = true;
         else choix = argv[i];
     }
@@ -220,12 +233,15 @@ int main(int argc, char** argv) {
     char* pt = strrchr(scenario, '.'); if (pt) *pt = 0;
 
     if (avec_entete)
-        printf("timestamp,scenario,mode,sf,trames,octets,toa_ms,eveil_ms,retard_alerte_s\n");
+        printf("timestamp,scenario,mode,sf,trames,octets,toa_ms,eveil_ms,retard_alerte_s,mesures\n");
 
-    Mode modes[3] = {Mode::NAIF, Mode::FIXE, Mode::S4};
-    for (int k = 0; k < 3; ++k) {
+    Mode modes[4] = {Mode::NAIF, Mode::FIXE, Mode::S4, Mode::S4V1};
+    bool trouve = false;
+    for (int k = 0; k < 4; ++k) {
         if (strcmp(choix, "tous") && strcmp(choix, nom_mode(modes[k]))) continue;
-        campagne(v, scenario, modes[k], p, sf, entete, hex);
+        trouve = true;
+        campagne(v, scenario, modes[k], p, sf, entete, hex, regroupement);
     }
+    if (!trouve) { fprintf(stderr, "mode inconnu : %s\n", choix); return 2; }
     return 0;
 }

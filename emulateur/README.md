@@ -2,7 +2,7 @@
 
 **Binôme :** B3 Émulateur & campagnes (Brahima Diarrassouba, Mathéo Vignaud)
 
-Programme qui se fait passer pour le nœud capteur de Brest : il rejoue des séries réelles de hauteur d'eau (E3, E4), décide quand émettre selon trois modes (E5 : naïf, fréquence fixe, S4 hybride), construit la trame de 12 octets du contrat d'interface v1.2 (E1) et compte les envois (E6).
+Programme qui se fait passer pour le nœud capteur de Brest : il rejoue des séries réelles de hauteur d'eau (E3, E4), décide quand mesurer et quand émettre selon quatre modes (E5 : naïf, fréquence fixe, S4 fidèle au L1, S4 v1 simplifié), construit la trame de 12 octets du contrat d'interface v1.2 (E1) et compte les envois (E6).
 
 **État (22/11/2026) :** tout fonctionne sur ordinateur (banc PC). Le portage sur la carte ESP32 avec la radio (E2) reste à faire.
 
@@ -20,55 +20,71 @@ emulateur/
 │   └── modes.cpp            # E5 : la seule implémentation des modes (référence)
 ├── test/
 │   ├── banc_pc.cpp          # banc : rejeu -> modes -> encodeur -> compteurs -> CSV
-│   ├── lancer_campagne.sh   # 3 modes x tous les scénarios -> resultats/
+│   ├── lancer_campagne.sh   # 4 modes x tous les scénarios -> resultats/
 │   └── test_modes.cpp       # essai rapide d'un mode sur un scénario
 ├── resultats/               # campagnes de référence (CSV)
 └── proto/                   # prototypes Python : rejeu (E4), compteurs, R3
 ```
 
 Les scénarios sont dans [`../donnees/scenarios/`](../donnees/README.md) (format `t_s;date_utc;hauteur_mm`).
-L'encodeur de trame est dans [`../trame/encodeur/`](../trame/encodeur/).
-
-## Utilisation (depuis `emulateur/`)
+L'encodeur de trame est dans [`../## Utilisation (depuis `emulateur/`)
 
 ```bash
 make                     # compile ./banc et ./test_modes
 make test                # vérifie la trame de test du contrat v1.2 (section 8)
-make campagne            # 3 modes x tous les scénarios, réglage par défaut
+make campagne            # 4 modes x tous les scénarios
 make campagne ARGS="--reglage s4-regle"
-make campagne ARGS="--reglage r3"
 
 ./banc ../donnees/scenarios/scenario_03_Y346400501.csv tous --entete
-./banc ../donnees/scenarios/scenario_03_Y346400501.csv s4 --reglage s4-regle
-./banc ../donnees/scenarios/scenario_03_Y346400501.csv s4 --hex    # trames qui défilent
+./banc ../donnees/scenarios/scenario_03_Y346400501.csv s4 --hex     # trames et état veille/vigilance/alerte
+./banc ../donnees/scenarios/scenario_03_Y346400501.csv s4v1 --reglage s4-regle
 ```
 
-Options du banc : `--sf N` (défaut 10), `--radio lorawan|p2p` (en-tête de 13 ou 0 octet pour le temps d'air), `--reglage defaut|s4-regle|r3`, `--periode-fixe S`, `--s4-delta MM`, `--s4-calme S`, `--s4-alerte S`, `--seuil MM` (seuil d'alerte absolu ; par défaut, niveau de base + 500 mm).
+Options du banc : `--sf N` (défaut 10), `--radio lorawan|p2p` (en-tête de 13 ou 0 octet pour le temps d'air), `--reglage defaut|s4-regle|r3` (mode s4v1), `--periode-fixe S`, `--s4-delta MM`, `--s4-calme S`, `--s4-alerte S`, `--seuil MM` (seuil d'alerte absolu ; par défaut, niveau de base + 500 mm), `--regroupement` (voir plus bas).
 
-## Réglages des modes
+## Les modes
 
-| Mode | `defaut` (L1) | `s4-regle` (présenté au client le 16/11) | `r3` (hypothèses de la simulation R3) |
+| Mode | Mesure | Trame | Référence |
 |---|---|---|---|
-| Naïf | 1 trame par mesure (5 min) | identique | identique |
-| Fixe | 1 trame / 30 min (référence du contrat) | identique | identique |
-| S4 | calme 1 h, alerte 15 min, variation 50 mm | calme 2 h, alerte 30 min, variation 100 mm | calme 1 h, alerte 10 min, variation 100 mm |
+| `naif` | toutes les 5 min | à chaque mesure | S0b du L1 |
+| `fixe` | toutes les 30 min | à chaque mesure | S0 du L1, rythme du contrat |
+| `s4` | 15 min en veille, 5 min en vigilance et en alerte | veille : 1 / h ; vigilance et alerte : 1 / 15 min ; alerte : immédiate, bit 0 | **S4 du L1 (§3.4)** |
+| `s4v1` | toutes les 5 min | calme / alerte + variation (réglages ci-dessous) | première version, chiffres du 16/11 |
 
-Le réglage `r3` donne exactement les mêmes nombres de trames que `emulateur/proto/sim_camarades.py` (branche R3) : les deux implémentations sont alignées.
+**Mode `s4` (fidèle au L1) :**
 
-Seuil d'alerte de S4 : niveau de base (plus basse hauteur vue) + 500 mm, avec 50 mm d'hystérésis, sauf si `--seuil` est donné.
-`modes.cpp` est la seule implémentation de référence : les prototypes Python doivent s'aligner sur ses valeurs.
+| État | Entrée | Mesure | Trame |
+|---|---|---|---|
+| Veille | situation normale | 1 / 15 min | 1 / h (avec les 3 mesures précédentes si `--regroupement`) |
+| Vigilance | niveau ≥ seuil bas, ou montée ≥ 20 cm/h entre 2 mesures | 1 / 5 min | 1 / 15 min |
+| Alerte | niveau ≥ seuil d'alerte | 1 / 5 min | immédiate, puis 1 / 15 min, bit 0 levé ; fin d'alerte envoyée tout de suite |
 
-Deux étapes, comme dans la simulation R3 : `decider_emission()` dit s'il faut émettre, `confirmer_envoi()` mémorise un envoi réellement parti. `doit_emettre()` enchaîne les deux (envoi supposé réussi).
+- Seuil d'alerte : niveau de base + 500 mm (ou `--seuil`). Seuil bas : seuil d'alerte − 250 mm (hypothèse, le L1 ne le chiffre pas). Montée rapide : 20 cm/h (proposition AL4). Hystérésis : 50 mm.
+- Valeur aberrante (saut de plus de 1,5 m entre deux mesures) ignorée, comme le ferait la médiane de 5 tirs du capteur.
+- Capteur muet : une trame « mesure invalide » (0xFFFF) après 30 min sans mesure valide.
+- Non codés : mode éco et défaut capteur (bits 1 à 7 de `status` interdits par le contrat v1.2).
+- `--regroupement` : écrit dans les octets réservés 9 à 11 les écarts (cm signés, −128 = absente) entre les 3 mesures précédentes et la mesure envoyée. Proposition du L1, **hors contrat v1.2** (octets émis à 0x00) : le décodeur l'ignore ; à n'activer qu'avec l'accord de Brest (v1.3). Le nombre de trames ne change pas.
 
-**S4 v1, simplifié par rapport au L1 (§3.4) :** 2 états (calme, alerte) au lieu de 3 (pas d'état vigilance), mesure toujours toutes les 5 min (pas de mesure toutes les 15 min au calme), 1 mesure par trame (pas de regroupement de 4 mesures), pas de mode éco ni de défaut capteur (bits interdits par le contrat v1.2).
+**Réglages du mode `s4v1` (`--reglage`) :**
+
+| Réglage | Calme | Alerte | Variation qui déclenche un envoi |
+|---|---|---|---|
+| `defaut` | 1 h | 15 min | 50 mm |
+| `s4-regle` (présenté au client le 16/11) | 2 h | 30 min | 100 mm |
+| `r3` (hypothèses de la simulation R3 de Gaetan, alerte ramenée à 15 min) | 1 h | 15 min | 100 mm |
+
+`modes.cpp` est la seule implémentation de référence : les prototypes Python doivent s'aligner sur ses règles. Deux étapes, comme dans la simulation R3 : `decider_emission()` dit s'il faut émettre, `confirmer_envoi()` mémorise un envoi réellement parti ; `doit_emettre()` enchaîne les deux.
 
 ## Format de l'export (E6)
 
-`timestamp,scenario,mode,sf,trames,octets,toa_ms,eveil_ms,retard_alerte_s`
+`timestamp,scenario,mode,sf,trames,octets,toa_ms,eveil_ms,retard_alerte_s,mesures`
 
-`eveil_ms` vaut 0 sur ordinateur (mesuré avec `millis()` sur l'ESP32 seulement). `retard_alerte_s` est vide si le seuil n'est jamais franchi.
+`eveil_ms` vaut 0 sur ordinateur (mesuré avec `millis()` sur l'ESP32 seulement). `retard_alerte_s` est vide si le seuil n'est jamais franchi. `mesures` = mesures réellement prises par le capteur (coût énergétique du L1 : 0,0136 mAh par mesure).
+
+vide si le seuil n'est jamais franchi.
 
 ## Reste à faire
 
 - E2 : pile radio sur ESP32 (RadioLib), selon le choix LoRaWAN ou point à point.
-- Regroupement de 4 mesures par trame (prévu au L1, pas encore codé).
+- Regroupement : à valider avec Brest (octets réservés, v1.3) avant de l'activer par défaut.
+- Mode éco et défaut capteur : demandent des bits de `status`, donc une évolution du contrat.

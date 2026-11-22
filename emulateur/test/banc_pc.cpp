@@ -11,7 +11,7 @@
 //
 // Usage :
 //   ./banc <scenario.csv> [naif|fixe|s4|tous] [--sf N] [--radio lorawan|p2p]
-//          [--reglage defaut|s4-regle] [--periode-fixe S] [--s4-delta MM]
+//          [--reglage defaut|s4-regle|r3] [--periode-fixe S] [--s4-delta MM]
 //          [--s4-calme S] [--s4-alerte S] [--seuil MM] [--hex] [--entete]
 //   ./banc --test-v12      (vérifie la trame de test du contrat v1.2)
 //
@@ -20,6 +20,8 @@
 //             variation 50 mm)
 //   s4-regle  réglage présenté au client le 16/11 (S4 : calme 2 h,
 //             alerte 30 min, variation 100 mm)
+//   r3        hypothèses de la simulation R3 de Gaetan (S4 : calme 1 h,
+//             alerte 10 min, variation 100 mm)
 // Les options --s4-* placées après --reglage le complètent ou le modifient.
 // -----------------------------------------------------------------------------
 #include <stdio.h>
@@ -95,6 +97,12 @@ static uint8_t next_min_trame(const EtatMode& e) {
 // Réglages nommés : un seul endroit pour les valeurs présentées au client.
 static bool appliquer_reglage(const char* nom, ParamsModes& p) {
     if (!strcmp(nom, "defaut")) { return true; }
+    if (!strcmp(nom, "r3")) {           // hypothèses de la simulation R3 (Gaetan)
+        p.s4_periode_calme_s  = 3600;   // 1 trame / h au calme
+        p.s4_periode_alerte_s = 600;    // 1 trame / 10 min en alerte
+        p.s4_delta_mm         = 100;    // envoi si l'eau varie de 10 cm
+        return true;
+    }
     if (!strcmp(nom, "s4-regle")) {
         p.s4_periode_calme_s  = 7200;   // 1 trame / 2 h au calme
         p.s4_periode_alerte_s = 1800;   // 1 trame / 30 min en alerte
@@ -167,7 +175,7 @@ int main(int argc, char** argv) {
     if (argc >= 2 && strcmp(argv[1], "--test-v12") == 0) return test_v12();
     if (argc < 2) {
         fprintf(stderr, "usage : %s <scenario.csv> [naif|fixe|s4|tous] [--sf N] "
-                "[--radio lorawan|p2p] [--reglage defaut|s4-regle] [--periode-fixe S] "
+                "[--radio lorawan|p2p] [--reglage defaut|s4-regle|r3] [--periode-fixe S] "
                 "[--s4-delta MM] [--s4-calme S] [--s4-alerte S] [--seuil MM] [--hex] [--entete]\n"
                 "        %s --test-v12\n", argv[0], argv[0]);
         return 2;
@@ -186,7 +194,7 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "--reglage") && i + 1 < argc) {
             ++i;
             if (!appliquer_reglage(argv[i], p)) {
-                fprintf(stderr, "réglage inconnu : %s (defaut, s4-regle)\n", argv[i]);
+                fprintf(stderr, "réglage inconnu : %s (defaut, s4-regle, r3)\n", argv[i]);
                 return 2;
             }
         }

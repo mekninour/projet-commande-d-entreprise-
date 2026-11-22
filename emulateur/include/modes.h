@@ -44,12 +44,18 @@ struct EtatMode {
     uint32_t nb_emissions      = 0;
 };
 
-// Une version de doit_emettre par mode.
-bool doit_emettre_naif(const Mesure& m, EtatMode& e);
-bool doit_emettre_fixe(const Mesure& m, EtatMode& e);
-bool doit_emettre_s4  (const Mesure& m, EtatMode& e);
+// Une règle de décision par mode (ne mémorise pas l'envoi).
+bool decider_naif(const Mesure& m, EtatMode& e);
+bool decider_fixe(const Mesure& m, EtatMode& e);
+bool decider_s4  (const Mesure& m, EtatMode& e);
 
-// Point d'entrée unique : appelle la version du mode choisi au démarrage.
+// Décision du mode choisi au démarrage, sans mémoriser l'envoi.
+bool decider_emission(const Mesure& m, EtatMode& e);
+
+// À appeler quand la trame est réellement partie (R3 : pas si la radio a échoué).
+void confirmer_envoi(const Mesure& m, EtatMode& e);
+
+// decider_emission() puis confirmer_envoi() si oui : envoi supposé réussi.
 bool doit_emettre(const Mesure& m, EtatMode& e);
 
 // Période d'émission en vigueur, en minutes : 5 (naïf, une trame par mesure),

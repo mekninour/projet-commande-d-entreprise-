@@ -2,30 +2,32 @@
 #include "modes.h"
 #include <string.h>
 
-// Mémorise une émission (appelé quand une version décide d'émettre).
-static bool memoriser_envoi(const Mesure& m, EtatMode& e) {
+// Deux étapes séparées (alignement sur la simulation R3 de Gaetan) :
+//   decider_emission() : dit s'il faut émettre ; met à jour l'état du capteur
+//                        (alerte, niveau de base, capteur muet), pas l'envoi ;
+//   confirmer_envoi()  : mémorise un envoi réellement parti.
+// R3 n'appelle confirmer_envoi() que si la trame a pu partir ; sinon la mesure
+// va dans le tampon et le mode redemandera d'émettre au pas suivant.
+// doit_emettre() enchaîne les deux (comportement du banc et de test_modes).
+void confirmer_envoi(const Mesure& m, EtatMode& e) {
     e.deja_emis       = true;
     e.t_dernier_envoi = m.t_s;
-    e.h_dernier_envoi = m.hauteur_mm;
+    if (m.valide()) e.h_dernier_envoi = m.hauteur_mm;
     e.nb_emissions++;
-    return true;
 }
 
 // ---------------------------------------------------------------------------
 // Mode NAÏF : émet chaque mesure valide.
-bool doit_emettre_naif(const Mesure& m, EtatMode& e) {
-    if (!m.valide()) return false;
-    return memoriser_envoi(m, e);
+bool decider_naif(const Mesure& m, EtatMode&) {
+    return m.valide();
 }
 
 // ---------------------------------------------------------------------------
 // Mode FRÉQUENCE FIXE : une émission toutes les periode_fixe_s secondes.
 // Si l'instant prévu tombe sur une mesure invalide, on émet la valide suivante.
-bool doit_emettre_fixe(const Mesure& m, EtatMode& e) {
+bool decider_fixe(const Mesure& m, EtatMode& e) {
     if (!m.valide()) return false;
-    if (!e.deja_emis || m.t_s - e.t_dernier_envoi >= e.p.periode_fixe_s)
-        return memoriser_envoi(m, e);
-    return false;
+    return !e.deja_emis || m.t_s - e.t_dernier_envoi >= e.p.periode_fixe_s;
 }
 
 // ---------------------------------------------------------------------------
@@ -38,15 +40,13 @@ bool doit_emettre_fixe(const Mesure& m, EtatMode& e) {
 // variation >= delta depuis le dernier envoi, ou période écoulée
 // (courte en alerte, longue sinon). Signale une fois un capteur muet
 // en émettant une mesure invalide (0xFFFF, cf. contrat d'interface).
-bool doit_emettre_s4(const Mesure& m, EtatMode& e) {
+bool decider_s4(const Mesure& m, EtatMode& e) {
     const ParamsModes& p = e.p;
 
     if (!m.valide()) {
         if (e.a_eu_valide && !e.muet_signale &&
             m.t_s - e.t_derniere_valide >= p.s4_muet_apres_s) {
             e.muet_signale    = true;
-            e.t_dernier_envoi = m.t_s;
-            e.nb_emissions++;
             return true;                   // trame "capteur muet"
         }
         return false;
@@ -76,24 +76,27 @@ bool doit_emettre_s4(const Mesure& m, EtatMode& e) {
     if (variation < 0) variation = -variation;
     uint32_t periode = e.en_alerte ? p.s4_periode_alerte_s : p.s4_periode_calme_s;
 
-    if (!e.deja_emis
+    return !e.deja_emis
         || retour_capteur
         || e.en_alerte != alerte_avant
         || variation >= (int32_t)p.s4_delta_mm
-        || m.t_s - e.t_dernier_envoi >= periode)
-        return memoriser_envoi(m, e);
-
-    return false;
+        || m.t_s - e.t_dernier_envoi >= periode;
 }
 
 // ---------------------------------------------------------------------------
-bool doit_emettre(const Mesure& m, EtatMode& e) {
+bool decider_emission(const Mesure& m, EtatMode& e) {
     switch (e.mode) {
-        case Mode::NAIF: return doit_emettre_naif(m, e);
-        case Mode::FIXE: return doit_emettre_fixe(m, e);
-        case Mode::S4:   return doit_emettre_s4(m, e);
+        case Mode::NAIF: return decider_naif(m, e);
+        case Mode::FIXE: return decider_fixe(m, e);
+        case Mode::S4:   return decider_s4(m, e);
     }
     return false;
+}
+
+bool doit_emettre(const Mesure& m, EtatMode& e) {
+    if (!decider_emission(m, e)) return false;
+    confirmer_envoi(m, e);
+    return true;
 }
 
 uint32_t periode_courante_min(const EtatMode& e) {

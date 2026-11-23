@@ -46,3 +46,7 @@ Thumbs.db
 trame/encodeur/test_encodeur.exe
 trame/encodeur/encodeur.obj
 trame/encodeur/main.obj
+# --- Banc PC de l'émulateur (emulateur/Makefile) ---
+emulateur/banc
+emulateur/test_modes
+emulateur/encodeur.o

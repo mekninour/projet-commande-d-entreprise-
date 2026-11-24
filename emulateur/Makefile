@@ -1,5 +1,5 @@
 # emulateur/Makefile — banc PC de l'émulateur (B3)
-#   make            compile ./banc et ./test_modes
+#   make            compile ./banc, ./banc_r3 et ./test_modes
 #   make test       vérifie la trame de test du contrat v1.2
 #   make campagne   3 modes x scénarios de donnees/scenarios -> resultats/
 #                   (ex. : make campagne ARGS="--reglage s4-regle")
@@ -10,10 +10,13 @@ CFLAGS   = -O2 -Wall -I../trame/encodeur
 
 ENCODEUR = ../trame/encodeur/encodeur.c
 
-all: banc test_modes
+all: banc banc_r3 test_modes
 
 banc: test/banc_pc.cpp src/modes.cpp include/*.h encodeur.o
 	$(CXX) $(CXXFLAGS) test/banc_pc.cpp src/modes.cpp encodeur.o -o banc
+
+banc_r3: test/banc_r3.cpp src/rattrapage_r3.cpp src/modes.cpp include/*.h encodeur.o
+	$(CXX) $(CXXFLAGS) test/banc_r3.cpp src/rattrapage_r3.cpp src/modes.cpp encodeur.o -o banc_r3
 
 test_modes: test/test_modes.cpp src/modes.cpp include/*.h
 	$(CXX) $(CXXFLAGS) test/test_modes.cpp src/modes.cpp -o test_modes
@@ -28,6 +31,6 @@ campagne: banc
 	./test/lancer_campagne.sh $(ARGS)
 
 clean:
-	rm -f banc test_modes encodeur.o
+	rm -f banc banc_r3 test_modes encodeur.o
 
 .PHONY: all test campagne clean

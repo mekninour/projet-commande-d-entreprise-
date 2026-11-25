@@ -70,6 +70,8 @@ Si la carte affiche « calcul de secours (moteur absent) », le moteur de l'éta
 
 Ils sont dans `plateforme/config/seuils.csv` (une ligne par capteur : `node_id,site,seuil_alerte`, seuil en mm). Le `node_id` est celui que l'émulateur écrit dans sa trame. **Un capteur absent de ce fichier n'a pas d'état d'alerte.** Le moteur relit le fichier à chaque mesure : une modification s'applique sans rien redémarrer.
 
+Les autres réglages du moteur (persistance, hystérésis, montée rapide, filtre des valeurs aberrantes) sont dans `plateforme/config/parametres_alerte.json`, et peuvent être changés capteur par capteur dans `seuils.csv`. Voir [`config/PARAMETRES.md`](config/PARAMETRES.md).
+
 ## 6. Démarrage automatique (facultatif)
 
 Node-RED :

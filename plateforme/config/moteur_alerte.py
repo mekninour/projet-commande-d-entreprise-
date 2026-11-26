@@ -3,7 +3,8 @@ import json
 import sqlite3
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 import paho.mqtt.client as mqtt
 
 # ==============================================================================
@@ -27,10 +28,18 @@ PARAMETRES_DEFAUT = {
     "temps_avant_seuil_min": 15.0, # alerte anticipée si le seuil sera atteint dans ce délai (0 = désactivé)
     "montee_rapide_mm_h": 200.0,   # au-dessus du seuil, alerte sans attendre la persistance (0 = désactivé)
     "saut_max_mm": 1500,           # écart entre deux mesures jugé impossible : ignoré pour la vitesse (0 = désactivé)
+    # Capteur muet : aucune trame depuis muet_facteur_next_min × next_min + muet_marge_min
+    "muet_facteur_next_min": 2.0,  # nombre de trames manquées tolérées
+    "muet_marge_min": 5.0,         # marge en plus (retard réseau, dérive de l'horloge du nœud)
+    "muet_next_min_defaut": 30.0,  # next_min pris quand la trame ne le donne pas (0xFF)
+    "muet_controle_s": 60.0,       # intervalle entre deux contrôles (réglage commun uniquement)
 }
 
+# Mesures relues dans la base pour retrouver l'état du moteur au démarrage
+FENETRE_RECONSTRUCTION = 50
+
 # Dictionnaires en mémoire pour le suivi
-suivi_capteurs = {}     # Pour le délai capteur muet
+suivi_capteurs = {}     # Pour le délai capteur muet : dernière trame, next_min, est_muet
 derniers_etats = {}     # Pour l'état précédent, le seq, et le compteur consécutif
 verrou = threading.Lock()
 
@@ -85,29 +94,56 @@ def charger_parametres(propres_capteur=None, json_path=PARAMETRES_PATH):
     return params
 
 
-def requete_trame_precedente(node_id, db_path=DB_SQLITE_PATH):
-    """Récupère en lecture seule dans l'historique SQLite la dernière trame valide enregistrée."""
+def maintenant():
+    """Heure actuelle en UTC (remplacée dans les tests)."""
+    return datetime.now(timezone.utc)
+
+
+def lire_date(texte):
+    """Date ISO 8601 de la base ou d'une trame (« Z » accepté), en UTC."""
+    d = datetime.fromisoformat(texte.replace("Z", "+00:00"))
+    return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
+
+
+def ouvrir_base(db_path=DB_SQLITE_PATH):
+    """Ouvre la base SQLite de S3 en lecture seule (sans créer de fichier vide si elle manque)."""
+    return sqlite3.connect(Path(db_path).resolve().as_uri() + "?mode=ro", uri=True)
+
+
+def reconstruire_etat(node_id, seuil, params, avant=None, db_path=DB_SQLITE_PATH,
+                      fenetre=FENETRE_RECONSTRUCTION):
+    """Retrouve l'état du moteur pour un capteur (alerte ou non, compteur de persistance)
+    en rejouant ses dernières mesures valides de la base.
+
+    La colonne alert de la base est le bit envoyé par le nœud (son propre seuil), pas l'état
+    du moteur : on ne la lit donc pas. avant = received_at de la mesure en cours, pour ne pas
+    la compter deux fois si S3 l'a déjà enregistrée.
+    """
+    requete = "SELECT water_mm, received_at, seq FROM mesures WHERE node_id = ? AND water_valid = 1"
+    arguments = [node_id]
+    if avant:
+        requete += " AND received_at < ?"
+        arguments.append(avant)
+    requete += " ORDER BY received_at DESC LIMIT ?"
+    arguments.append(fenetre)
     try:
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT water_mm, received_at, alert 
-            FROM mesures 
-            WHERE node_id = ? AND water_valid = 1 
-            ORDER BY received_at DESC LIMIT 1
-        """, (node_id,))
-        row = cursor.fetchone()
-        conn.close()
-        
-        if row:
-            return {
-                "water_mm": row[0],
-                "received_at": row[1],
-                "alert": bool(row[2])
-            }
+        conn = ouvrir_base(db_path)
+        try:
+            lignes = conn.execute(requete, arguments).fetchall()
+        finally:
+            conn.close()
     except sqlite3.Error:
         print(f"[INFO SQLite] Pas d'historique SQLite disponible pour le capteur {node_id}.")
-    return None
+        return None
+
+    etat = None
+    for water_mm, received_at, seq in reversed(lignes):
+        trame = {"water_mm": water_mm, "received_at": received_at}
+        temps_dep, vitesse, _ = calculer_temps_avant_depassement(trame, etat, seuil, params["saut_max_mm"])
+        alerte, _, compteur = est_alerte(etat, water_mm, seuil, temps_dep, vitesse, params)
+        etat = {"seq": seq, "water_mm": water_mm, "received_at": received_at,
+                "alert": alerte, "nb_consecutifs_seuil": compteur}
+    return etat
 
 
 def calculer_temps_avant_depassement(trame_act, trame_prec, seuil, saut_max_mm=0):
@@ -198,8 +234,112 @@ def construit_json(node_id, site, seuil, hauteur, etat, cause, tendance, vitesse
 # 2. SURVEILLANCE DES CAPTEURS MUETS (Thread d'arrière-plan)
 # ==============================================================================
 
+def echeance_capteur(suivi, params):
+    """Heure limite de la prochaine trame : dernière trame + facteur × next_min + marge."""
+    next_min = suivi.get("next_min") or params["muet_next_min_defaut"]
+    delai = params["muet_facteur_next_min"] * next_min + params["muet_marge_min"]
+    return suivi["dernier_datetime"] + timedelta(minutes=delai)
+
+
+def params_capteur(node_id, csv_path=CSV_SEUILS_PATH, json_path=PARAMETRES_PATH):
+    """Site, seuil et réglages d'un capteur, relus à chaque fois (comme pour les mesures)."""
+    site, seuil, propres = requete_capteur(node_id, csv_path)
+    return site, seuil, charger_parametres(propres, json_path)
+
+
+def publier(client, node_id, payload_json):
+    topic = f"{TOPIC_ALERTES_PREFIX}{node_id}"
+    client.publish(topic, payload_json, qos=1, retain=True)
+    return topic
+
+
+def charger_echeances_depuis_base(db_path=DB_SQLITE_PATH, csv_path=CSV_SEUILS_PATH):
+    """Au démarrage : reprend dans la base la dernière trame de chaque capteur, pour que
+    les échéances « capteur muet » survivent à un redémarrage du moteur.
+    Renvoie le nombre de capteurs repris."""
+    try:
+        conn = ouvrir_base(db_path)
+        try:
+            dernieres = conn.execute("""
+                SELECT m.node_id, m.received_at, m.next_min
+                FROM mesures m
+                WHERE m.received_at = (SELECT MAX(received_at) FROM mesures WHERE node_id = m.node_id)
+                GROUP BY m.node_id
+            """).fetchall()
+            hauteurs = dict(conn.execute("""
+                SELECT m.node_id, m.water_mm
+                FROM mesures m
+                WHERE m.water_valid = 1 AND m.received_at = (
+                    SELECT MAX(received_at) FROM mesures WHERE node_id = m.node_id AND water_valid = 1)
+                GROUP BY m.node_id
+            """).fetchall())
+        finally:
+            conn.close()
+    except sqlite3.Error as e:
+        print(f"[MUET] Base illisible ({e}) : aucune échéance reprise au démarrage.")
+        return 0
+
+    repris = 0
+    with verrou:
+        for node_id, received_at, next_min in dernieres:
+            try:
+                site, seuil, _ = requete_capteur(node_id, csv_path)
+            except (OSError, ValueError) as e:
+                print(f"[MUET] Capteur {node_id} ignoré au démarrage : {e}")
+                continue
+            if node_id in suivi_capteurs:   # une trame est déjà arrivée depuis le démarrage
+                continue
+            suivi_capteurs[node_id] = {
+                "dernier_datetime": lire_date(received_at),
+                "received_at": received_at,
+                "next_min": next_min,
+                "site": site,
+                "seuil": seuil,
+                "derniere_hauteur": hauteurs.get(node_id),
+                "est_muet": False,
+            }
+            repris += 1
+    print(f"[MUET] {repris} capteur(s) repris depuis la base.")
+    return repris
+
+
+def controler_capteurs_muets(client, instant=None, csv_path=CSV_SEUILS_PATH, json_path=PARAMETRES_PATH):
+    """Un contrôle : publie une fois l'objet AL3 « muet » pour chaque capteur dont l'échéance
+    est dépassée. Renvoie la liste des node_id passés muets."""
+    instant = instant or maintenant()
+    a_publier = []
+    with verrou:
+        for node_id, suivi in suivi_capteurs.items():
+            if suivi["est_muet"]:
+                continue   # déjà signalé : une seule publication
+            try:
+                site, seuil, params = params_capteur(node_id, csv_path, json_path)
+            except (OSError, ValueError):
+                site, seuil, params = suivi["site"], suivi["seuil"], charger_parametres(None, json_path)
+            echeance = echeance_capteur(suivi, params)
+            if instant <= echeance:
+                continue
+            suivi["est_muet"] = True
+            a_publier.append((node_id, construit_json(
+                node_id=node_id, site=site, seuil=seuil, hauteur=suivi["derniere_hauteur"],
+                etat="muet", cause="capteur_muet", tendance=None, vitesse=None,
+                temps_depassement=None, received_at=suivi["received_at"]), echeance))
+
+    for node_id, payload_json, echeance in a_publier:
+        topic = publier(client, node_id, payload_json)
+        print(f"[MUET] {topic} -> capteur muet (dernière trame {suivi_capteurs[node_id]['received_at']}, "
+              f"attendue au plus tard {echeance.isoformat()})")
+    return [node_id for node_id, _, _ in a_publier]
+
+
 def verifier_capteurs_muets(client):
-    pass  # Inchangé pour l'instant
+    """Thread d'arrière-plan : contrôle les échéances toutes les muet_controle_s secondes."""
+    while True:
+        try:
+            controler_capteurs_muets(client)
+        except Exception as e:
+            print(f"[ERREUR] Contrôle des capteurs muets impossible : {e}")
+        time.sleep(max(5.0, charger_parametres()["muet_controle_s"]))
 
 
 # ==============================================================================
@@ -223,7 +363,9 @@ def on_message(client, userdata, msg):
         
         site, seuil, propres = requete_capteur(node_id)
         params = charger_parametres(propres)
-        
+        mesure_valide = bool(mesure.get("water_valid", False)) and mesure.get("water_mm") is not None
+        retour_json = None
+
         with verrou:
             # 1. Filtrage des doublons via le seq par rapport à la dernière trame en mémoire
             if node_id in derniers_etats:
@@ -231,39 +373,59 @@ def on_message(client, userdata, msg):
                     print(f"[INFO] Doublon détecté (seq={seq_actuel}) pour le capteur {node_id} -> Ignoré.")
                     return
 
-            dt_reception = datetime.fromisoformat(mesure["received_at"].replace("Z", "+00:00"))
-
+            # 2. Suivi capteur muet. L'échéance part de l'heure d'arrivée ici (comme le tableau de bord) :
+            #    une trame rejouée par l'injecteur avec une heure passée ne le rend pas muet.
+            precedent_suivi = suivi_capteurs.get(node_id, {})
+            etait_muet = precedent_suivi.get("est_muet", False)
             suivi_capteurs[node_id] = {
-                "dernier_datetime": dt_reception,
-                "next_min": mesure.get("next_min", 30),
+                "dernier_datetime": maintenant(),
+                "received_at": mesure["received_at"],
+                "next_min": mesure.get("next_min"),
                 "site": site,
                 "seuil": seuil,
-                "derniere_hauteur": mesure.get("water_mm") if mesure.get("water_valid") else suivi_capteurs.get(node_id, {}).get("derniere_hauteur"),
+                "derniere_hauteur": mesure["water_mm"] if mesure_valide else precedent_suivi.get("derniere_hauteur"),
                 "est_muet": False
             }
-            
-            # 2. Gestion des mesures invalides (0xFFFF)
-            if not mesure.get("water_valid", False) or mesure.get("water_mm") is None:
-                print(f"[INFO] Capteur {node_id} : mesure invalide ignorée.")
-                return
-                
-            # 3. Récupération de la trame précédente (mémoire ou lecture seule SQLite)
+
+            # 3. Récupération de l'état précédent du moteur (mémoire, sinon rejoué depuis la base)
             if node_id in derniers_etats:
                 trame_prec = derniers_etats[node_id]
             else:
-                trame_prec = requete_trame_precedente(node_id)
-                
-            # 4. Calculs métier
+                trame_prec = reconstruire_etat(node_id, seuil, params, avant=mesure["received_at"])
+                if trame_prec:
+                    derniers_etats[node_id] = trame_prec
+
+            # 4. Retour d'un capteur muet : un objet AL3 publié une seule fois, avec l'état connu du moteur
+            if etait_muet:
+                retour_json = construit_json(
+                    node_id=node_id, site=site, seuil=seuil,
+                    hauteur=mesure["water_mm"] if mesure_valide else None,
+                    etat="alerte" if trame_prec and trame_prec["alert"] else "normal",
+                    cause="retour_capteur", tendance=None, vitesse=None, temps_depassement=None,
+                    received_at=mesure["received_at"])
+
+        if retour_json:
+            topic = publier(client, node_id, retour_json)
+            print(f"[RETOUR] {topic} -> le capteur {node_id} émet de nouveau (seq {seq_actuel})")
+
+        with verrou:
+            # 5. Gestion des mesures invalides (0xFFFF)
+            if not mesure_valide:
+                print(f"[INFO] Capteur {node_id} : mesure invalide ignorée.")
+                return
+            trame_prec = derniers_etats.get(node_id)
+
+            # 6. Calculs métier
             temps_dep, vitesse, tendance = calculer_temps_avant_depassement(
                 mesure, trame_prec, seuil, params["saut_max_mm"])
             
-            # 5. Évaluation de l'alerte (persistance, hystérésis, montée rapide : voir parametres_alerte.json)
+            # 7. Évaluation de l'alerte (persistance, hystérésis, montée rapide : voir parametres_alerte.json)
             alerte_active, cause, nouveau_compteur = est_alerte(
                 trame_prec, mesure["water_mm"], seuil, temps_dep, vitesse, params)
             etat = "alerte" if alerte_active else "normal"
             cause_json = "seuil" if cause == "hysteresis" else cause
             
-            # 6. Sauvegarde en mémoire de l'état courant
+            # 8. Sauvegarde en mémoire de l'état courant
             derniers_etats[node_id] = {
                 "seq": seq_actuel,
                 "water_mm": mesure["water_mm"],
@@ -272,7 +434,7 @@ def on_message(client, userdata, msg):
                 "nb_consecutifs_seuil": nouveau_compteur
             }
             
-        # 7. Publication MQTT
+        # 9. Publication MQTT
         payload_json = construit_json(
             node_id=node_id,
             site=site,
@@ -286,8 +448,7 @@ def on_message(client, userdata, msg):
             received_at=mesure["received_at"]
         )
         
-        topic_sortie = f"{TOPIC_ALERTES_PREFIX}{node_id}"
-        client.publish(topic_sortie, payload_json, qos=1, retain=True)
+        topic_sortie = publier(client, node_id, payload_json)
         print(f"[PUBLIÉ] {topic_sortie} -> État: {etat.upper()} | Hauteur: {mesure['water_mm']}mm / {seuil}mm | Vitesse: {vitesse}mm/h | Seq: {seq_actuel}")
 
     except Exception as e:
@@ -303,11 +464,15 @@ if __name__ == "__main__":
     client.on_connect = on_connect
     client.on_message = on_message
     
+    print("Démarrage du moteur d'alerte...")
+    # Échéances « capteur muet » reprises depuis la base (sinon un capteur déjà muet
+    # avant le redémarrage ne serait jamais signalé).
+    charger_echeances_depuis_base()
+    client.connect(MQTT_BROKER, MQTT_PORT, 60)
+
+    # Après connect() : les objets « muet » du premier contrôle partent sur la connexion ouverte.
     thread_muet = threading.Thread(target=verifier_capteurs_muets, args=(client,), daemon=True)
     thread_muet.start()
-    
-    print("Démarrage du moteur d'alerte...")
-    client.connect(MQTT_BROKER, MQTT_PORT, 60)
     
     try:
         client.loop_forever()

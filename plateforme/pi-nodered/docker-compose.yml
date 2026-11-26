@@ -1,0 +1,27 @@
+# Node-RED sur le Raspberry Pi de la passerelle, à côté de ChirpStack.
+# Lancement : cd ~/nodered && sudo docker compose up -d
+services:
+  nodered:
+    image: nodered/node-red:4.1
+    container_name: nodered
+    restart: unless-stopped
+    # Réseau de l'hôte : Node-RED joint Mosquitto sur localhost:1883 (port publié
+    # par chirpstack-docker), comme prévu dans les flows AL2 et S2.
+    network_mode: host
+    environment:
+      - TZ=Europe/Paris
+    volumes:
+      - ./data:/data                      # flows, settings.js, modules, base pce92.db
+      - ./codec:/codec:ro                 # trame/decodeur/codec.js (contrat v1.2)
+
+  moteur:
+    build: ./moteur
+    image: opal/moteur-alerte:local
+    container_name: moteur-alerte
+    restart: unless-stopped
+    network_mode: host                    # broker MQTT sur localhost:1883
+    environment:
+      - TZ=Europe/Paris
+    volumes:
+      - ./data:/data                      # base pce92.db partagée avec Node-RED
+      - ./moteur:/work                    # moteur_alerte.py + plateforme/config/seuils.csv

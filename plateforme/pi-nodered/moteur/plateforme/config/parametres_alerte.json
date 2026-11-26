@@ -1,0 +1,8 @@
+{
+  "_aide": "Réglages du moteur d'alerte pour tous les capteurs. Une colonne du même nom dans seuils.csv remplace la valeur pour un capteur. Relu à chaque mesure, sans redémarrage. Détail : plateforme/config/PARAMETRES.md",
+  "persistance_mesures": 2,
+  "hysteresis_pct": 10,
+  "temps_avant_seuil_min": 15,
+  "montee_rapide_mm_h": 200,
+  "saut_max_mm": 1500
+}

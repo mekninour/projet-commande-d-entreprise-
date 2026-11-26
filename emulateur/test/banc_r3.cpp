@@ -1,6 +1,6 @@
 // emulateur/test/banc_r3.cpp
 // Copie de banc_pc.cpp intégrant la conservation côté nœud et le rattrapage
-// étalé (tâche R3) via la librairie r3_rattrapage.
+// étalé (tâche R3) via la librairie rattrapage_r3.
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -16,17 +16,15 @@ extern "C" {
 #include "encodeur.h"
 }
 
-static const uint16_t NODE_ID          = 3;
-static const uint8_t  BATT_INCONNUE    = 0xFF;
-static const uint8_t  STATUS_ALERTE    = 0x01;
-static const uint8_t  STATUS_RATTRAPAGE = 0x20;
-static const uint8_t  TAILLE_TRAME     = 12;
+static const uint16_t NODE_ID       = 3;
+static const uint8_t  BATT_INCONNUE = 0xFF;
+static const uint8_t  STATUS_ALERTE = 0x01;
+static const uint8_t  TAILLE_TRAME  = 12;
 
 struct ConfigR3 {
     bool     coupure_active = false;
     uint32_t coupure_debut  = 0;
     uint32_t coupure_fin    = 0;
-    bool     marquer_flag   = false;
     ParamsR3 params;
 };
 
@@ -142,6 +140,7 @@ static void campagne(const std::vector<Mesure>& v, const char* scenario, Mode mo
                 }
             } else {
                 r3_empiler(r3, m, seq);
+                confirmer_envoi(m, e);
                 if (hex) {
                     fprintf(stderr, "%s %-4s %-9s t+%7lus BUFFERED(seq=%u, tam=%u)\n",
                             scenario, nom_mode(mode),
@@ -156,19 +155,17 @@ static void campagne(const std::vector<Mesure>& v, const char* scenario, Mode mo
             if (!r3_depiler(r3, m.t_s, entree)) break;
             bool alerte_r = s4 ? e.en_alerte : tem.en_alerte;
             uint8_t st = alerte_r ? STATUS_ALERTE : 0;
-            if (cfg_r3.marquer_flag) st |= STATUS_RATTRAPAGE;
-            seq = (uint16_t)(seq + 1);
 
             uint8_t trame[TAILLE_TRAME];
-            encoder_trame(NODE_ID, entree.mesure.hauteur_mm, BATT_INCONNUE, seq,
+            encoder_trame(NODE_ID, entree.mesure.hauteur_mm, BATT_INCONNUE, entree.seq_origine,
                           st, next_min_trame(e), trame);
             c.emise(TAILLE_TRAME);
             emis_ce_cycle++;
 
             if (hex) {
-                fprintf(stderr, "%s %-4s %-9s t+%7lus RATTR(t+%lu) ", scenario, nom_mode(mode),
+                fprintf(stderr, "%s %-4s %-9s t+%7lus RATTR(seq=%u, t+%lu) ", scenario, nom_mode(mode),
                         mode == Mode::S4 ? nom_etat_s4(e.etat_s4) : "",
-                        (unsigned long)m.t_s, (unsigned long)entree.mesure.t_s);
+                        (unsigned long)m.t_s, (unsigned)entree.seq_origine, (unsigned long)entree.mesure.t_s);
                 for (int k = 0; k < TAILLE_TRAME; ++k) fprintf(stderr, "%02X ", trame[k]);
                 fprintf(stderr, "\n");
             }
@@ -210,7 +207,7 @@ int main(int argc, char** argv) {
                 "[--radio lorawan|p2p] [--reglage defaut|s4-regle|r3] [--periode-fixe S] "
                 "[--s4-delta MM] [--s4-calme S] [--s4-alerte S] [--seuil MM] "
                 "[--r3-coupure DEBUT:FIN] [--r3-cap N] [--r3-max-cycle N] [--r3-delai S] "
-                "[--r3-flag] [--regroupement] [--hex] [--entete]\n"
+                "[--regroupement] [--hex] [--entete]\n"
                 "        %s --test-v12\n", argv[0], argv[0]);
         return 2;
     }
@@ -260,8 +257,6 @@ int main(int argc, char** argv) {
             cfg_r3.params.max_par_cycle = (uint8_t)atoi(argv[++i]);
         else if (!strcmp(argv[i], "--r3-delai") && i + 1 < argc)
             cfg_r3.params.delai_min_s = (uint32_t)atol(argv[++i]);
-        else if (!strcmp(argv[i], "--r3-flag"))
-            cfg_r3.marquer_flag = true;
         else if (!strcmp(argv[i], "--hex")) hex = true;
         else if (!strcmp(argv[i], "--regroupement")) regroupement = true;
         else if (!strcmp(argv[i], "--entete")) avec_entete = true;

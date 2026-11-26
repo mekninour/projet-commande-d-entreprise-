@@ -1,0 +1,1729 @@
+[
+ {
+  "id": "a1b2c3d4e5f60001",
+  "type": "tab",
+  "label": "S2 – Réception des trames",
+  "disabled": false,
+  "info": "Tâche S2 (B1). Deux entrées : pce92/uplink (récepteur point à point, injecteur) et application/+/device/+/event/up (ChirpStack, LoRaWAN privé) -> décodage (codec S1) -> contrôle seq -> pce92/mesures/<node_id> et pce92/evenements.\nVoir plateforme/flows/README.md."
+ },
+ {
+  "id": "a1b2c3d4e5f60002",
+  "type": "mqtt-broker",
+  "name": "Mosquitto local",
+  "broker": "localhost",
+  "port": "1883",
+  "clientid": "",
+  "autoConnect": true,
+  "usetls": false,
+  "protocolVersion": "4",
+  "keepalive": "60",
+  "cleansession": true,
+  "autoUnsubscribe": true,
+  "birthTopic": "",
+  "closeTopic": "",
+  "willTopic": ""
+ },
+ {
+  "id": "a1b2c3d4e5f60010",
+  "type": "comment",
+  "z": "a1b2c3d4e5f60001",
+  "name": "S2 : trame brute ou uplink ChirpStack -> mesure normalisée (contrat v1.2)",
+  "info": "",
+  "x": 230,
+  "y": 40,
+  "wires": []
+ },
+ {
+  "id": "a1b2c3d4e5f60011",
+  "type": "mqtt in",
+  "z": "a1b2c3d4e5f60001",
+  "name": "Trames reçues (point à point)",
+  "topic": "pce92/uplink",
+  "qos": "1",
+  "datatype": "json",
+  "broker": "a1b2c3d4e5f60002",
+  "nl": false,
+  "rap": true,
+  "rh": 0,
+  "inputs": 0,
+  "x": 130,
+  "y": 120,
+  "wires": [
+   [
+    "a1b2c3d4e5f60012"
+   ]
+  ]
+ },
+ {
+  "id": "a1b2c3d4e5f60014",
+  "type": "mqtt in",
+  "z": "a1b2c3d4e5f60001",
+  "name": "Uplinks ChirpStack (LoRaWAN)",
+  "topic": "application/+/device/+/event/up",
+  "qos": "1",
+  "datatype": "json",
+  "broker": "a1b2c3d4e5f60002",
+  "nl": false,
+  "rap": true,
+  "rh": 0,
+  "inputs": 0,
+  "x": 150,
+  "y": 180,
+  "wires": [
+   [
+    "a1b2c3d4e5f60015"
+   ]
+  ]
+ },
+ {
+  "id": "a1b2c3d4e5f60015",
+  "type": "function",
+  "z": "a1b2c3d4e5f60001",
+  "name": "0. Lire ChirpStack",
+  "func": "// S2 – Étape 0 : lire un uplink ChirpStack v4 (LoRaWAN privé) et le mettre au même format\n// que le récepteur point à point, pour que la suite du flux (étapes 1 et 2) soit commune.\n// Entrée : message JSON publié par ChirpStack sur application/<id>/device/<devEui>/event/up\n//   { deduplicationId, time, deviceInfo { devEui, deviceName }, fPort, fCnt, data (base64),\n//     object (si le codec est installé dans ChirpStack), rxInfo [ { rssi, snr, gwTime, nsTime, … } ] }\n// Sortie : { received_at, payload_hex, rssi, snr, source, dev_eui, fcnt } vers « 1. Décoder ».\n// La trame est toujours décodée ici par le codec S1, même si ChirpStack a déjà rempli « object » :\n// un seul décodage, le même pour les deux voies.\nconst up = msg.payload || {};\nconst rx = Array.isArray(up.rxInfo) ? up.rxInfo : [];\n// ChirpStack a déjà supprimé les réceptions en double (plusieurs passerelles) : rxInfo les liste.\n// On garde la meilleure réception (RSSI le plus fort).\nconst meilleure = rx.reduce((m, r) => (m === null || (r.rssi ?? -999) > (m.rssi ?? -999) ? r : m), null) || {};\n\n// Règle 4 du contrat : horodatage à la réception. On prend l'heure de la passerelle si elle\n// est connue (time, ou gwTime de la réception), sinon l'heure du serveur ChirpStack (nsTime),\n// sinon l'heure de Node-RED.\nconst recuA = up.time || meilleure.gwTime || meilleure.nsTime || new Date().toISOString();\n\nlet hex = null;\nif (typeof up.data === \"string\" && up.data.length) {\n    hex = Buffer.from(up.data, \"base64\").toString(\"hex\").toUpperCase();\n}\nconst devEui = (up.deviceInfo && up.deviceInfo.devEui) || null;\n\nmsg.payload = {\n    received_at: recuA,\n    payload_hex: hex,            // null si l'uplink n'a pas de données : « 1. Décoder » le rejettera\n    rssi: meilleure.rssi ?? null,\n    snr: meilleure.snr ?? null,\n    source: \"chirpstack\",\n    dev_eui: devEui,\n    fcnt: up.fCnt ?? null\n};\nnode.status({ fill: hex ? \"green\" : \"yellow\", shape: \"dot\",\n              text: (devEui || \"appareil inconnu\") + (up.fCnt !== undefined ? \" · fCnt \" + up.fCnt : \"\") });\nreturn msg;\n",
+  "outputs": 1,
+  "timeout": 0,
+  "noerr": 0,
+  "initialize": "",
+  "finalize": "",
+  "libs": [],
+  "x": 190,
+  "y": 240,
+  "wires": [
+   [
+    "a1b2c3d4e5f60012"
+   ]
+  ]
+ },
+ {
+  "id": "a1b2c3d4e5f60012",
+  "type": "function",
+  "z": "a1b2c3d4e5f60001",
+  "name": "1. Décoder (codec S1)",
+  "func": "// S2 – Étape 1 : décoder la trame brute et produire une mesure normalisée.\n// Entrée : message du récepteur (ou de l'injecteur) sur pce92/uplink, ou uplink ChirpStack\n// déjà remis à ce format par « 0. Lire ChirpStack » :\n//   { received_at, payload_hex, rssi, snr, source }\n// Sortie 1 : mesure normalisée. Sortie 2 : trame rejetée.\nconst codec = global.get(\"codec\");\nif (!codec) {\n    node.error(\"Codec S1 non chargé : ajouter codec dans functionGlobalContext (voir plateforme/flows/README.md)\");\n    node.status({ fill: \"red\", shape: \"ring\", text: \"codec absent\" });\n    return null;\n}\n\nconst entree = msg.payload || {};\nconst recuA = entree.received_at || new Date().toISOString(); // règle 4 : horodatage à la réception\n\nfunction rejet(raison) {\n    node.warn(\"Trame rejetée : \" + raison);\n    return [null, {\n        topic: \"pce92/evenements\",\n        payload: { type: \"rejet\", raison: raison, received_at: recuA,\n                   payload_hex: entree.payload_hex || null, source: entree.source || null }\n    }];\n}\n\nif (typeof entree.payload_hex !== \"string\") {\n    return rejet(\"message sans payload_hex\");\n}\nconst hex = entree.payload_hex.replace(/\\s+/g, \"\");\nif (!/^[0-9a-fA-F]*$/.test(hex) || hex.length % 2 !== 0) {\n    return rejet(\"payload_hex n'est pas de l'hexadécimal valide\");\n}\n\nconst octets = hex.match(/../g).map(h => parseInt(h, 16));\nconst res = codec.decodeUplink({ bytes: octets });\nif (res.errors) {\n    return rejet(res.errors.join(\" ; \"));\n}\n\nconst d = res.data;\nmsg.topic = \"pce92/mesures/\" + d.node_id;\nmsg.payload = {\n    node_id: d.node_id,\n    received_at: recuA,\n    water_mm: d.water_valid ? d.water_mm : null,  // null = mesure invalide (0xFFFF)\n    water_valid: d.water_valid,\n    batt_v: d.batt_v,                             // null = tension inconnue (0xFF)\n    seq: d.seq,\n    alert: d.alert,\n    next_min: d.next_min,                         // null = inconnu (0xFF)\n    expected_next_at: d.next_min === null ? null\n        : new Date(Date.parse(recuA) + d.next_min * 60000).toISOString(),\n    rssi: entree.rssi ?? null,\n    snr: entree.snr ?? null,\n    source: entree.source ?? null,\n    payload_hex: hex.toUpperCase(),\n    warnings: res.warnings\n};\nif (res.warnings.length) {\n    node.warn(\"Nœud \" + d.node_id + \", seq \" + d.seq + \" : \" + res.warnings.join(\" ; \"));\n}\nnode.status({ fill: d.alert ? \"red\" : \"green\", shape: \"dot\",\n              text: \"nœud \" + d.node_id + \" · seq \" + d.seq + \" · \" + (d.water_valid ? d.water_mm + \" mm\" : \"invalide\") });\nreturn [msg, null];\n",
+  "outputs": 2,
+  "timeout": 0,
+  "noerr": 0,
+  "initialize": "",
+  "finalize": "",
+  "libs": [],
+  "outputLabels": [
+   "mesure",
+   "rejet"
+  ],
+  "x": 340,
+  "y": 120,
+  "wires": [
+   [
+    "a1b2c3d4e5f60013"
+   ],
+   [
+    "a1b2c3d4e5f60021",
+    "a1b2c3d4e5f60031"
+   ]
+  ]
+ },
+ {
+  "id": "a1b2c3d4e5f60013",
+  "type": "function",
+  "z": "a1b2c3d4e5f60001",
+  "name": "2. Contrôler seq (règle 5)",
+  "func": "// S2 – Étape 2 : contrôler le compteur seq (règle 5 du contrat).\n// Écart = (seq - dernier seq) modulo 65536, par nœud :\n//   = 1          : trame normale ;\n//   > 1          : trames perdues (la mesure est gardée) ;\n//   = 0          : doublon (écarté) ;\n//   > 32768      : la trame est plus ancienne que la dernière reçue. Trois cas :\n//     - seq déjà reçu, trame identique        -> doublon en retard (écarté) ;\n//     - seq compté comme perdu                 -> trame reçue en retard : elle n'est pas\n//       publiée comme mesure actuelle (son heure de mesure est inconnue en v1.2 :\n//       annexe A, une ancienne mesure ne doit pas déclencher d'alerte nouvelle). Elle est\n//       gardée dans le journal des événements, et retirée du compte des pertes ;\n//     - sinon                                   -> retour en arrière du compteur\n//       (redémarrage du nœud) : la mesure est gardée, la mémoire du nœud repart de zéro.\n// Mémoire par nœud : le dernier seq, les MEMOIRE derniers seq reçus (avec leur trame)\n// et les seq perdus récents. Elle repart de zéro au redémarrage de Node-RED.\n// Sortie 1 : mesure acceptée. Sortie 2 : événement.\nconst MEMOIRE = 64;\nconst m = msg.payload;\nconst cle = \"seq_\" + m.node_id;\nconst etat = flow.get(cle);\nconst precedent = etat ? etat.dernier : undefined;\nconst ecart = etat ? (m.seq - precedent + 65536) % 65536 : null;\n\nfunction evenement(type, details) {\n    return {\n        topic: \"pce92/evenements\",\n        payload: Object.assign({ type: type, node_id: m.node_id, seq: m.seq, received_at: m.received_at }, details)\n    };\n}\n\n// Garde la trame reçue en mémoire (les MEMOIRE plus récentes).\nfunction retenir(e) {\n    e.recus[m.seq] = m.payload_hex;\n    e.ordre.push(m.seq);\n    while (e.ordre.length > MEMOIRE) delete e.recus[e.ordre.shift()];\n}\n\n// 1. Première trame de ce nœud depuis le démarrage de Node-RED : pas de contrôle possible.\nif (!etat) {\n    const e = { dernier: m.seq, dernier_recu_a: m.received_at, next_min: m.next_min, recus: {}, ordre: [], perdus: [] };\n    retenir(e);\n    flow.set(cle, e);\n    m.seq_gap = null;\n    m.lost_before = 0;\n    node.status({ fill: \"green\", shape: \"dot\", text: \"nœud \" + m.node_id + \" · seq \" + m.seq });\n    return [msg, null];\n}\n\n// 2. Doublon immédiat (même seq que la dernière trame).\nif (ecart === 0) {\n    node.status({ fill: \"yellow\", shape: \"ring\", text: \"doublon écarté · nœud \" + m.node_id + \" · seq \" + m.seq });\n    return [null, evenement(\"doublon\", { en_retard: false })];\n}\n\n// 3. Trame plus ancienne que la dernière reçue.\nif (ecart > 32768) {\n    const retard = (precedent - m.seq + 65536) % 65536;   // en nombre de trames\n    if (etat.recus[m.seq] !== undefined && etat.recus[m.seq] === m.payload_hex) {\n        node.status({ fill: \"yellow\", shape: \"ring\", text: \"doublon en retard écarté · nœud \" + m.node_id + \" · seq \" + m.seq });\n        return [null, evenement(\"doublon\", { en_retard: true, retard_trames: retard })];\n    }\n    const i = etat.perdus.indexOf(m.seq);\n    if (i >= 0) {\n        etat.perdus.splice(i, 1);\n        retenir(etat);\n        flow.set(cle, etat);\n        // Heure de mesure estimée : le contrat v1.2 ne la transmet pas. On la reconstruit à partir\n        // de la dernière trame reçue et de la période (next_min), comme le propose l'annexe A.\n        const periode = (etat.next_min || m.next_min || 30) * 60000;\n        const estimee = new Date(Date.parse(etat.dernier_recu_a) - retard * periode).toISOString();\n        node.status({ fill: \"blue\", shape: \"ring\", text: \"trame en retard · nœud \" + m.node_id + \" · seq \" + m.seq });\n        return [null, evenement(\"trame_en_retard\", {\n            retard_trames: retard, mesure_estimee_a: estimee,\n            water_mm: m.water_mm, water_valid: m.water_valid, batt_v: m.batt_v, alert: m.alert\n        })];\n    }\n    // Redémarrage du nœud : la mémoire repart de cette trame.\n    const e = { dernier: m.seq, dernier_recu_a: m.received_at, next_min: m.next_min, recus: {}, ordre: [], perdus: [] };\n    retenir(e);\n    flow.set(cle, e);\n    m.seq_gap = ecart;\n    m.lost_before = 0;\n    node.status({ fill: \"yellow\", shape: \"dot\", text: \"compteur revenu en arrière · nœud \" + m.node_id + \" · seq \" + m.seq });\n    return [msg, evenement(\"retour_seq\", { seq_precedent: precedent })];\n}\n\n// 4. Trame normale (écart 1) ou trames perdues juste avant (écart > 1).\nlet evt = null;\nm.seq_gap = ecart;\nm.lost_before = ecart - 1;\nif (m.lost_before > 0) {\n    evt = evenement(\"trames_perdues\", { nombre: m.lost_before, seq_precedent: precedent });\n    for (let k = 1; k <= m.lost_before; k++) etat.perdus.push((precedent + k) % 65536);\n    // On ne garde que les pertes récentes (au plus MEMOIRE trames derrière la dernière).\n    etat.perdus = etat.perdus.filter(s => (m.seq - s + 65536) % 65536 <= MEMOIRE);\n}\netat.dernier = m.seq;\netat.dernier_recu_a = m.received_at;\netat.next_min = m.next_min;\nretenir(etat);\nflow.set(cle, etat);\nnode.status({ fill: m.lost_before ? \"yellow\" : \"green\", shape: \"dot\",\n              text: \"nœud \" + m.node_id + \" · seq \" + m.seq + (m.lost_before ? \" · \" + m.lost_before + \" perdue(s)\" : \"\") });\nreturn [msg, evt];\n",
+  "outputs": 2,
+  "timeout": 0,
+  "noerr": 0,
+  "initialize": "",
+  "finalize": "",
+  "libs": [],
+  "outputLabels": [
+   "mesure acceptée",
+   "événement"
+  ],
+  "x": 580,
+  "y": 120,
+  "wires": [
+   [
+    "a1b2c3d4e5f60020",
+    "a1b2c3d4e5f60030"
+   ],
+   [
+    "a1b2c3d4e5f60021",
+    "a1b2c3d4e5f60031"
+   ]
+  ]
+ },
+ {
+  "id": "a1b2c3d4e5f60020",
+  "type": "mqtt out",
+  "z": "a1b2c3d4e5f60001",
+  "name": "Mesures",
+  "topic": "",
+  "qos": "1",
+  "retain": "false",
+  "respTopic": "",
+  "contentType": "",
+  "userProps": "",
+  "correl": "",
+  "expiry": "",
+  "broker": "a1b2c3d4e5f60002",
+  "x": 840,
+  "y": 100,
+  "wires": []
+ },
+ {
+  "id": "a1b2c3d4e5f60021",
+  "type": "mqtt out",
+  "z": "a1b2c3d4e5f60001",
+  "name": "Événements",
+  "topic": "",
+  "qos": "1",
+  "retain": "false",
+  "respTopic": "",
+  "contentType": "",
+  "userProps": "",
+  "correl": "",
+  "expiry": "",
+  "broker": "a1b2c3d4e5f60002",
+  "x": 850,
+  "y": 200,
+  "wires": []
+ },
+ {
+  "id": "a1b2c3d4e5f60030",
+  "type": "debug",
+  "z": "a1b2c3d4e5f60001",
+  "name": "Voir les mesures",
+  "active": true,
+  "tosidebar": true,
+  "console": false,
+  "tostatus": false,
+  "complete": "payload",
+  "targetType": "msg",
+  "statusVal": "",
+  "statusType": "auto",
+  "x": 860,
+  "y": 140,
+  "wires": []
+ },
+ {
+  "id": "a1b2c3d4e5f60031",
+  "type": "debug",
+  "z": "a1b2c3d4e5f60001",
+  "name": "Voir les événements",
+  "active": true,
+  "tosidebar": true,
+  "console": false,
+  "tostatus": false,
+  "complete": "payload",
+  "targetType": "msg",
+  "statusVal": "",
+  "statusType": "auto",
+  "x": 870,
+  "y": 240,
+  "wires": []
+ },
+ {
+  "id": "c1d2e3f4a5b60001",
+  "type": "tab",
+  "label": "S3 – Stockage de l'historique",
+  "disabled": false,
+  "info": "Tâche S3 (B1). Enregistre pce92/mesures/+ et pce92/evenements dans SQLite, recharge les 7 derniers jours au démarrage et expose GET /pce92/mesures.\nVoir plateforme/flows/README.md."
+ },
+ {
+  "id": "c1d2e3f4a5b60002",
+  "type": "sqlitedb",
+  "db": "/data/pce92.db",
+  "mode": "RWC"
+ },
+ {
+  "id": "c1d2e3f4a5b60009",
+  "type": "comment",
+  "z": "c1d2e3f4a5b60001",
+  "name": "À ADAPTER : chemin du fichier de base (double-clic sur un nœud sqlite, puis le crayon)",
+  "info": "Windows : C:/Users/<nom>/.node-red/pce92.db\nRaspberry Pi : /home/<nom>/.node-red/pce92.db",
+  "x": 330,
+  "y": 40,
+  "wires": []
+ },
+ {
+  "id": "c1d2e3f4a5b60010",
+  "type": "comment",
+  "z": "c1d2e3f4a5b60001",
+  "name": "1. Au démarrage : créer les tables, puis recharger 7 jours dans les tableaux de bord",
+  "info": "",
+  "x": 340,
+  "y": 90,
+  "wires": []
+ },
+ {
+  "id": "c1d2e3f4a5b60011",
+  "type": "inject",
+  "z": "c1d2e3f4a5b60001",
+  "name": "Démarrage",
+  "props": [],
+  "repeat": "",
+  "crontab": "",
+  "once": true,
+  "onceDelay": "2",
+  "topic": "",
+  "x": 120,
+  "y": 140,
+  "wires": [
+   [
+    "c1d2e3f4a5b60012"
+   ]
+  ]
+ },
+ {
+  "id": "c1d2e3f4a5b60012",
+  "type": "function",
+  "z": "c1d2e3f4a5b60001",
+  "name": "Schéma (CREATE TABLE)",
+  "func": "// Crée les tables au démarrage (sans rien effacer si elles existent déjà).\nmsg.topic = `-- S3 : schéma de la base (créé au démarrage s'il n'existe pas)\nPRAGMA journal_mode = WAL;\nCREATE TABLE IF NOT EXISTS mesures (\n    id          INTEGER PRIMARY KEY AUTOINCREMENT,\n    node_id     INTEGER NOT NULL,\n    received_at TEXT    NOT NULL,   -- heure de réception, ISO 8601 UTC (règle 4)\n    water_mm    INTEGER,            -- NULL = mesure invalide (0xFFFF)\n    water_valid INTEGER NOT NULL,   -- 1 / 0\n    batt_v      REAL,               -- NULL = inconnue (0xFF)\n    seq         INTEGER NOT NULL,\n    alert       INTEGER NOT NULL,   -- bit d'alerte du nœud (1 / 0)\n    next_min    INTEGER,            -- NULL = inconnu (0xFF)\n    lost_before INTEGER NOT NULL DEFAULT 0,\n    rssi        INTEGER,\n    snr         REAL,\n    source      TEXT,\n    payload_hex TEXT,\n    UNIQUE (node_id, received_at, seq)\n);\nCREATE INDEX IF NOT EXISTS idx_mesures_capteur_heure ON mesures (node_id, received_at);\nCREATE TABLE IF NOT EXISTS evenements (\n    id          INTEGER PRIMARY KEY AUTOINCREMENT,\n    received_at TEXT NOT NULL,\n    type        TEXT NOT NULL,      -- trames_perdues, doublon, trame_en_retard, rejet, retour_seq\n    node_id     INTEGER,\n    seq         INTEGER,\n    details     TEXT                -- le message complet, en JSON\n);\nCREATE INDEX IF NOT EXISTS idx_evenements_heure ON evenements (received_at);`;\nreturn msg;",
+  "outputs": 1,
+  "timeout": 0,
+  "noerr": 0,
+  "initialize": "",
+  "finalize": "",
+  "libs": [],
+  "x": 300,
+  "y": 140,
+  "wires": [
+   [
+    "c1d2e3f4a5b60013"
+   ]
+  ]
+ },
+ {
+  "id": "c1d2e3f4a5b60013",
+  "type": "sqlite",
+  "z": "c1d2e3f4a5b60001",
+  "mydb": "c1d2e3f4a5b60002",
+  "sqlquery": "batch",
+  "sql": "",
+  "name": "Créer les tables",
+  "x": 490,
+  "y": 140,
+  "wires": [
+   [
+    "c1d2e3f4a5b60014",
+    "c1d2e3f4a5b60018"
+   ]
+  ]
+ },
+ {
+  "id": "c1d2e3f4a5b60018",
+  "type": "function",
+  "z": "c1d2e3f4a5b60001",
+  "name": "Paramètres événements",
+  "func": "// Événements des 7 derniers jours (pour les compteurs et la liste de la vue technique).\nmsg.params = { $depuis: new Date(Date.now() - 7 * 86400000).toISOString() };\nreturn msg;",
+  "outputs": 1,
+  "timeout": 0,
+  "noerr": 0,
+  "initialize": "",
+  "finalize": "",
+  "libs": [],
+  "x": 690,
+  "y": 190,
+  "wires": [
+   [
+    "c1d2e3f4a5b60019"
+   ]
+  ]
+ },
+ {
+  "id": "c1d2e3f4a5b60019",
+  "type": "sqlite",
+  "z": "c1d2e3f4a5b60001",
+  "mydb": "c1d2e3f4a5b60002",
+  "sqlquery": "prepared",
+  "sql": "SELECT received_at, details FROM evenements WHERE received_at >= $depuis ORDER BY received_at;",
+  "name": "Lire les événements",
+  "x": 880,
+  "y": 190,
+  "wires": [
+   [
+    "c1d2e3f4a5b6001a"
+   ]
+  ]
+ },
+ {
+  "id": "c1d2e3f4a5b6001a",
+  "type": "function",
+  "z": "c1d2e3f4a5b60001",
+  "name": "Rejouer les événements",
+  "func": "// Renvoie les événements enregistrés vers les tableaux de bord, comme s'ils venaient de S2.\nconst messages = (msg.payload || []).map(l => {\n    let e = {};\n    try { e = JSON.parse(l.details); } catch (err) { e = { type: \"inconnu\" }; }\n    if (!e.received_at) e.received_at = l.received_at;\n    return { topic: \"pce92/evenements\", replay: true, payload: e };\n});\nnode.status({ fill: \"blue\", shape: \"dot\", text: messages.length + \" événement(s) rechargé(s)\" });\nreturn [messages];",
+  "outputs": 1,
+  "timeout": 0,
+  "noerr": 0,
+  "initialize": "",
+  "finalize": "",
+  "libs": [],
+  "x": 1080,
+  "y": 190,
+  "wires": [
+   [
+    "c1d2e3f4a5b60017"
+   ]
+  ]
+ },
+ {
+  "id": "c1d2e3f4a5b60014",
+  "type": "function",
+  "z": "c1d2e3f4a5b60001",
+  "name": "Paramètres 7 jours",
+  "func": "// Requête « 7 derniers jours ». msg.node_id = un capteur précis, ou absent = tous les capteurs.\n// msg.jours = nombre de jours (7 par défaut).\nconst jours = Number(msg.jours) > 0 ? Number(msg.jours) : 7;\nmsg.params = {\n    $depuis: new Date(Date.now() - jours * 86400000).toISOString(),\n    $node_id: (msg.node_id === undefined || msg.node_id === null || msg.node_id === \"\") ? null : Number(msg.node_id)\n};\nreturn msg;",
+  "outputs": 1,
+  "timeout": 0,
+  "noerr": 0,
+  "initialize": "",
+  "finalize": "",
+  "libs": [],
+  "x": 680,
+  "y": 140,
+  "wires": [
+   [
+    "c1d2e3f4a5b60015"
+   ]
+  ]
+ },
+ {
+  "id": "c1d2e3f4a5b60015",
+  "type": "sqlite",
+  "z": "c1d2e3f4a5b60001",
+  "mydb": "c1d2e3f4a5b60002",
+  "sqlquery": "prepared",
+  "sql": "SELECT node_id, received_at, water_mm, water_valid, batt_v, seq, alert, next_min,\n       lost_before, rssi, snr, source, payload_hex\nFROM mesures\nWHERE received_at >= $depuis\n  AND ($node_id IS NULL OR node_id = $node_id)\nORDER BY received_at;",
+  "name": "Lire 7 jours",
+  "x": 860,
+  "y": 140,
+  "wires": [
+   [
+    "c1d2e3f4a5b60016"
+   ]
+  ]
+ },
+ {
+  "id": "c1d2e3f4a5b60016",
+  "type": "function",
+  "z": "c1d2e3f4a5b60001",
+  "name": "Rejouer vers les tableaux de bord",
+  "func": "// Au démarrage : renvoie l'historique des 7 derniers jours vers les tableaux de bord,\n// sous la même forme que les mesures publiées par S2, marqué replay = true.\nconst lignes = msg.payload || [];\nconst messages = lignes.map(l => ({\n    topic: \"pce92/mesures/\" + l.node_id,\n    replay: true,\n    payload: {\n        node_id: l.node_id, received_at: l.received_at,\n        water_mm: l.water_mm, water_valid: l.water_valid === 1,\n        batt_v: l.batt_v, seq: l.seq, alert: l.alert === 1, next_min: l.next_min,\n        expected_next_at: l.next_min === null ? null\n            : new Date(Date.parse(l.received_at) + l.next_min * 60000).toISOString(),\n        lost_before: l.lost_before, rssi: l.rssi, snr: l.snr, source: l.source, payload_hex: l.payload_hex\n    }\n}));\nnode.status({ fill: \"blue\", shape: \"dot\", text: messages.length + \" mesure(s) rechargée(s)\" });\nreturn [messages];",
+  "outputs": 1,
+  "timeout": 0,
+  "noerr": 0,
+  "initialize": "",
+  "finalize": "",
+  "libs": [],
+  "x": 1080,
+  "y": 140,
+  "wires": [
+   [
+    "c1d2e3f4a5b60017"
+   ]
+  ]
+ },
+ {
+  "id": "c1d2e3f4a5b60017",
+  "type": "link out",
+  "z": "c1d2e3f4a5b60001",
+  "name": "Historique → AL5/AL6",
+  "mode": "link",
+  "links": [
+   "b1c2d3e4f5a60018"
+  ],
+  "x": 1275,
+  "y": 140,
+  "wires": []
+ },
+ {
+  "id": "c1d2e3f4a5b60020",
+  "type": "comment",
+  "z": "c1d2e3f4a5b60001",
+  "name": "2. Enregistrer chaque mesure et chaque événement publiés par S2",
+  "info": "",
+  "x": 280,
+  "y": 250,
+  "wires": []
+ },
+ {
+  "id": "c1d2e3f4a5b60021",
+  "type": "mqtt in",
+  "z": "c1d2e3f4a5b60001",
+  "name": "Mesures (S2)",
+  "topic": "pce92/mesures/+",
+  "qos": "1",
+  "datatype": "json",
+  "broker": "a1b2c3d4e5f60002",
+  "nl": false,
+  "rap": true,
+  "rh": 0,
+  "inputs": 0,
+  "x": 130,
+  "y": 300,
+  "wires": [
+   [
+    "c1d2e3f4a5b60022"
+   ]
+  ]
+ },
+ {
+  "id": "c1d2e3f4a5b60022",
+  "type": "function",
+  "z": "c1d2e3f4a5b60001",
+  "name": "Préparer la mesure",
+  "func": "// Prépare l'enregistrement d'une mesure (topic pce92/mesures/<node_id>, publié par S2).\nconst m = msg.payload;\nif (!m || typeof m.node_id !== \"number\" || !m.received_at) {\n    node.warn(\"Mesure ignorée : format inattendu\");\n    return null;\n}\nconst b = (v) => (v ? 1 : 0);\nmsg.params = {\n    $node_id: m.node_id,\n    $received_at: new Date(m.received_at).toISOString(),   // format unique, pour trier et filtrer\n    $water_mm: m.water_valid ? m.water_mm : null,\n    $water_valid: b(m.water_valid),\n    $batt_v: m.batt_v ?? null,\n    $seq: m.seq,\n    $alert: b(m.alert),\n    $next_min: m.next_min ?? null,\n    $lost_before: m.lost_before || 0,\n    $rssi: m.rssi ?? null,\n    $snr: m.snr ?? null,\n    $source: m.source ?? null,\n    $payload_hex: m.payload_hex ?? null\n};\nreturn msg;",
+  "outputs": 1,
+  "timeout": 0,
+  "noerr": 0,
+  "initialize": "",
+  "finalize": "",
+  "libs": [],
+  "x": 330,
+  "y": 300,
+  "wires": [
+   [
+    "c1d2e3f4a5b60023"
+   ]
+  ]
+ },
+ {
+  "id": "c1d2e3f4a5b60023",
+  "type": "sqlite",
+  "z": "c1d2e3f4a5b60001",
+  "mydb": "c1d2e3f4a5b60002",
+  "sqlquery": "prepared",
+  "sql": "INSERT OR IGNORE INTO mesures\n (node_id, received_at, water_mm, water_valid, batt_v, seq, alert, next_min, lost_before, rssi, snr, source, payload_hex)\nVALUES\n ($node_id, $received_at, $water_mm, $water_valid, $batt_v, $seq, $alert, $next_min, $lost_before, $rssi, $snr, $source, $payload_hex);",
+  "name": "INSERT mesures",
+  "x": 530,
+  "y": 300,
+  "wires": [
+   []
+  ]
+ },
+ {
+  "id": "c1d2e3f4a5b60024",
+  "type": "mqtt in",
+  "z": "c1d2e3f4a5b60001",
+  "name": "Événements (S2)",
+  "topic": "pce92/evenements",
+  "qos": "1",
+  "datatype": "json",
+  "broker": "a1b2c3d4e5f60002",
+  "nl": false,
+  "rap": true,
+  "rh": 0,
+  "inputs": 0,
+  "x": 140,
+  "y": 360,
+  "wires": [
+   [
+    "c1d2e3f4a5b60025"
+   ]
+  ]
+ },
+ {
+  "id": "c1d2e3f4a5b60025",
+  "type": "function",
+  "z": "c1d2e3f4a5b60001",
+  "name": "Préparer l'événement",
+  "func": "// Prépare l'enregistrement d'un événement (topic pce92/evenements, publié par S2).\nconst e = msg.payload || {};\nmsg.params = {\n    $received_at: new Date(e.received_at || Date.now()).toISOString(),\n    $type: e.type || \"inconnu\",\n    $node_id: e.node_id ?? null,\n    $seq: e.seq ?? null,\n    $details: JSON.stringify(e)\n};\nreturn msg;",
+  "outputs": 1,
+  "timeout": 0,
+  "noerr": 0,
+  "initialize": "",
+  "finalize": "",
+  "libs": [],
+  "x": 340,
+  "y": 360,
+  "wires": [
+   [
+    "c1d2e3f4a5b60026"
+   ]
+  ]
+ },
+ {
+  "id": "c1d2e3f4a5b60026",
+  "type": "sqlite",
+  "z": "c1d2e3f4a5b60001",
+  "mydb": "c1d2e3f4a5b60002",
+  "sqlquery": "prepared",
+  "sql": "INSERT INTO evenements (received_at, type, node_id, seq, details)\nVALUES ($received_at, $type, $node_id, $seq, $details);",
+  "name": "INSERT evenements",
+  "x": 540,
+  "y": 360,
+  "wires": [
+   []
+  ]
+ },
+ {
+  "id": "c1d2e3f4a5b60030",
+  "type": "comment",
+  "z": "c1d2e3f4a5b60001",
+  "name": "3. Requête « 7 derniers jours » (cliquer sur le bouton, résultat dans le debug)",
+  "info": "",
+  "x": 320,
+  "y": 390,
+  "wires": []
+ },
+ {
+  "id": "c1d2e3f4a5b60031",
+  "type": "inject",
+  "z": "c1d2e3f4a5b60001",
+  "name": "7 jours – capteur 3",
+  "props": [
+   {
+    "p": "node_id",
+    "v": "3",
+    "vt": "num"
+   },
+   {
+    "p": "jours",
+    "v": "7",
+    "vt": "num"
+   }
+  ],
+  "repeat": "",
+  "crontab": "",
+  "once": false,
+  "onceDelay": "0.1",
+  "topic": "",
+  "x": 140,
+  "y": 440,
+  "wires": [
+   [
+    "c1d2e3f4a5b60032"
+   ]
+  ]
+ },
+ {
+  "id": "c1d2e3f4a5b60032",
+  "type": "function",
+  "z": "c1d2e3f4a5b60001",
+  "name": "Paramètres 7 jours",
+  "func": "// Requête « 7 derniers jours ». msg.node_id = un capteur précis, ou absent = tous les capteurs.\n// msg.jours = nombre de jours (7 par défaut).\nconst jours = Number(msg.jours) > 0 ? Number(msg.jours) : 7;\nmsg.params = {\n    $depuis: new Date(Date.now() - jours * 86400000).toISOString(),\n    $node_id: (msg.node_id === undefined || msg.node_id === null || msg.node_id === \"\") ? null : Number(msg.node_id)\n};\nreturn msg;",
+  "outputs": 1,
+  "timeout": 0,
+  "noerr": 0,
+  "initialize": "",
+  "finalize": "",
+  "libs": [],
+  "x": 340,
+  "y": 440,
+  "wires": [
+   [
+    "c1d2e3f4a5b60033"
+   ]
+  ]
+ },
+ {
+  "id": "c1d2e3f4a5b60033",
+  "type": "sqlite",
+  "z": "c1d2e3f4a5b60001",
+  "mydb": "c1d2e3f4a5b60002",
+  "sqlquery": "prepared",
+  "sql": "SELECT node_id, received_at, water_mm, water_valid, batt_v, seq, alert, next_min,\n       lost_before, rssi, snr, source, payload_hex\nFROM mesures\nWHERE received_at >= $depuis\n  AND ($node_id IS NULL OR node_id = $node_id)\nORDER BY received_at;",
+  "name": "Lire 7 jours",
+  "x": 520,
+  "y": 440,
+  "wires": [
+   [
+    "c1d2e3f4a5b60034"
+   ]
+  ]
+ },
+ {
+  "id": "c1d2e3f4a5b60034",
+  "type": "function",
+  "z": "c1d2e3f4a5b60001",
+  "name": "Résumé",
+  "func": "// Résume le résultat de la requête dans le panneau debug.\nconst lignes = msg.payload || [];\nconst parCapteur = {};\nfor (const l of lignes) parCapteur[l.node_id] = (parCapteur[l.node_id] || 0) + 1;\nnode.status({ fill: \"green\", shape: \"dot\", text: lignes.length + \" mesure(s) sur 7 jours\" });\nmsg.resume = { total: lignes.length, par_capteur: parCapteur,\n               premiere: lignes.length ? lignes[0].received_at : null,\n               derniere: lignes.length ? lignes[lignes.length - 1].received_at : null };\nreturn msg;",
+  "outputs": 1,
+  "timeout": 0,
+  "noerr": 0,
+  "initialize": "",
+  "finalize": "",
+  "libs": [],
+  "x": 680,
+  "y": 440,
+  "wires": [
+   [
+    "c1d2e3f4a5b60035"
+   ]
+  ]
+ },
+ {
+  "id": "c1d2e3f4a5b60035",
+  "type": "debug",
+  "z": "c1d2e3f4a5b60001",
+  "name": "Résultat 7 jours",
+  "active": true,
+  "tosidebar": true,
+  "console": false,
+  "tostatus": false,
+  "complete": "resume",
+  "targetType": "msg",
+  "statusVal": "",
+  "statusType": "auto",
+  "x": 860,
+  "y": 440,
+  "wires": []
+ },
+ {
+  "id": "c1d2e3f4a5b60040",
+  "type": "comment",
+  "z": "c1d2e3f4a5b60001",
+  "name": "4. API : GET /pce92/mesures?node_id=3&jours=7&format=csv",
+  "info": "",
+  "x": 270,
+  "y": 510,
+  "wires": []
+ },
+ {
+  "id": "c1d2e3f4a5b60041",
+  "type": "http in",
+  "z": "c1d2e3f4a5b60001",
+  "name": "GET /pce92/mesures",
+  "url": "/pce92/mesures",
+  "method": "get",
+  "upload": false,
+  "swaggerDoc": "",
+  "x": 150,
+  "y": 560,
+  "wires": [
+   [
+    "c1d2e3f4a5b60042"
+   ]
+  ]
+ },
+ {
+  "id": "c1d2e3f4a5b60042",
+  "type": "function",
+  "z": "c1d2e3f4a5b60001",
+  "name": "Lire les paramètres",
+  "func": "// GET /pce92/mesures?node_id=3&jours=7&format=csv\nconst q = msg.req.query || {};\nconst jours = Math.min(Math.max(Number(q.jours) || 7, 1), 366);\nmsg.format = q.format === \"csv\" ? \"csv\" : \"json\";\nmsg.params = {\n    $depuis: new Date(Date.now() - jours * 86400000).toISOString(),\n    $node_id: q.node_id ? Number(q.node_id) : null\n};\nreturn msg;",
+  "outputs": 1,
+  "timeout": 0,
+  "noerr": 0,
+  "initialize": "",
+  "finalize": "",
+  "libs": [],
+  "x": 360,
+  "y": 560,
+  "wires": [
+   [
+    "c1d2e3f4a5b60043"
+   ]
+  ]
+ },
+ {
+  "id": "c1d2e3f4a5b60043",
+  "type": "sqlite",
+  "z": "c1d2e3f4a5b60001",
+  "mydb": "c1d2e3f4a5b60002",
+  "sqlquery": "prepared",
+  "sql": "SELECT node_id, received_at, water_mm, water_valid, batt_v, seq, alert, next_min,\n       lost_before, rssi, snr, source, payload_hex\nFROM mesures\nWHERE received_at >= $depuis\n  AND ($node_id IS NULL OR node_id = $node_id)\nORDER BY received_at;",
+  "name": "Lire les mesures",
+  "x": 550,
+  "y": 560,
+  "wires": [
+   [
+    "c1d2e3f4a5b60044"
+   ]
+  ]
+ },
+ {
+  "id": "c1d2e3f4a5b60044",
+  "type": "function",
+  "z": "c1d2e3f4a5b60001",
+  "name": "JSON ou CSV",
+  "func": "// Met en forme la réponse : JSON (par défaut) ou CSV (export, par ex. pour OPALimpact).\nconst lignes = (msg.payload || []).map(l => Object.assign({}, l,\n    { water_valid: l.water_valid === 1, alert: l.alert === 1 }));\nif (msg.format === \"csv\") {\n    const colonnes = [\"node_id\", \"received_at\", \"water_mm\", \"water_valid\", \"batt_v\", \"seq\", \"alert\",\n                      \"next_min\", \"lost_before\", \"rssi\", \"snr\", \"source\", \"payload_hex\"];\n    const csv = [colonnes.join(\",\")].concat(\n        lignes.map(l => colonnes.map(c => (l[c] === null || l[c] === undefined) ? \"\" : l[c]).join(\",\"))\n    ).join(\"\\n\");\n    msg.payload = csv;\n    msg.headers = { \"Content-Type\": \"text/csv; charset=utf-8\",\n                    \"Content-Disposition\": \"attachment; filename=pce92_mesures.csv\" };\n} else {\n    msg.payload = lignes;\n    msg.headers = { \"Content-Type\": \"application/json; charset=utf-8\" };\n}\nmsg.statusCode = 200;\nreturn msg;",
+  "outputs": 1,
+  "timeout": 0,
+  "noerr": 0,
+  "initialize": "",
+  "finalize": "",
+  "libs": [],
+  "x": 730,
+  "y": 560,
+  "wires": [
+   [
+    "c1d2e3f4a5b60045"
+   ]
+  ]
+ },
+ {
+  "id": "c1d2e3f4a5b60045",
+  "type": "http response",
+  "z": "c1d2e3f4a5b60001",
+  "name": "Réponse",
+  "statusCode": "",
+  "headers": {},
+  "x": 890,
+  "y": 560,
+  "wires": []
+ },
+ {
+  "id": "b1c2d3e4f5a60001",
+  "type": "tab",
+  "label": "AL5 / AL6 – Tableaux de bord",
+  "disabled": false,
+  "info": "MVP des tableaux de bord (B1). Lit pce92/mesures/+ et pce92/evenements (S2), et pce92/alertes/+ (moteur d'alerte de B2, plateforme/config/moteur_alerte.py).\nVue simple : /dashboard/simple · Vue technique : /dashboard/technique.\nVoir plateforme/dashboards/README.md."
+ },
+ {
+  "id": "b1c2d3e4f5a60002",
+  "type": "ui-base",
+  "name": "PCE 92 – Surveillance des crues",
+  "path": "/dashboard",
+  "appIcon": "",
+  "includeClientData": true,
+  "acceptsClientConfig": [
+   "ui-notification",
+   "ui-control"
+  ],
+  "showPathInSidebar": false,
+  "headerContent": "page",
+  "navigationStyle": "default",
+  "titleBarStyle": "default",
+  "showReconnectNotification": true,
+  "notificationDisplayTime": 1,
+  "showDisconnectNotification": true,
+  "allowInstall": false
+ },
+ {
+  "id": "b1c2d3e4f5a60003",
+  "type": "ui-theme",
+  "name": "Thème PCE 92",
+  "colors": {
+   "surface": "#1f3a5f",
+   "primary": "#1f3a5f",
+   "bgPage": "#f4f6f8",
+   "groupBg": "#ffffff",
+   "groupOutline": "#d9d9e0"
+  },
+  "sizes": {
+   "density": "default",
+   "pagePadding": "12px",
+   "groupGap": "12px",
+   "groupBorderRadius": "8px",
+   "widgetGap": "12px"
+  }
+ },
+ {
+  "id": "b1c2d3e4f5a60004",
+  "type": "ui-page",
+  "name": "Vue simple",
+  "ui": "b1c2d3e4f5a60002",
+  "path": "/simple",
+  "icon": "home",
+  "layout": "grid",
+  "theme": "b1c2d3e4f5a60003",
+  "breakpoints": [
+   {
+    "name": "Default",
+    "px": "0",
+    "cols": "3"
+   },
+   {
+    "name": "Tablet",
+    "px": "576",
+    "cols": "6"
+   },
+   {
+    "name": "Small Desktop",
+    "px": "768",
+    "cols": "9"
+   },
+   {
+    "name": "Desktop",
+    "px": "1024",
+    "cols": "12"
+   }
+  ],
+  "order": 1,
+  "className": "",
+  "visible": "true",
+  "disabled": "false"
+ },
+ {
+  "id": "b1c2d3e4f5a60005",
+  "type": "ui-page",
+  "name": "Vue technique",
+  "ui": "b1c2d3e4f5a60002",
+  "path": "/technique",
+  "icon": "chart-line",
+  "layout": "grid",
+  "theme": "b1c2d3e4f5a60003",
+  "breakpoints": [
+   {
+    "name": "Default",
+    "px": "0",
+    "cols": "3"
+   },
+   {
+    "name": "Tablet",
+    "px": "576",
+    "cols": "6"
+   },
+   {
+    "name": "Small Desktop",
+    "px": "768",
+    "cols": "9"
+   },
+   {
+    "name": "Desktop",
+    "px": "1024",
+    "cols": "12"
+   }
+  ],
+  "order": 2,
+  "className": "",
+  "visible": "true",
+  "disabled": "false"
+ },
+ {
+  "id": "b1c2d3e4f5a60006",
+  "type": "ui-group",
+  "name": "État des sites",
+  "page": "b1c2d3e4f5a60004",
+  "width": "6",
+  "height": "1",
+  "order": 1,
+  "showTitle": true,
+  "className": "",
+  "visible": "true",
+  "disabled": "false",
+  "groupType": "default"
+ },
+ {
+  "id": "b1c2d3e4f5a60007",
+  "type": "ui-group",
+  "name": "Capteurs (du plus urgent au moins urgent)",
+  "page": "b1c2d3e4f5a60005",
+  "width": "12",
+  "height": "1",
+  "order": 1,
+  "showTitle": true,
+  "className": "",
+  "visible": "true",
+  "disabled": "false",
+  "groupType": "default"
+ },
+ {
+  "id": "b1c2d3e4f5a60008",
+  "type": "ui-group",
+  "name": "Capteurs et réception",
+  "page": "b1c2d3e4f5a60005",
+  "width": "12",
+  "height": "1",
+  "order": 2,
+  "showTitle": true,
+  "className": "",
+  "visible": "true",
+  "disabled": "false",
+  "groupType": "default"
+ },
+ {
+  "id": "b1c2d3e4f5a60010",
+  "type": "comment",
+  "z": "b1c2d3e4f5a60001",
+  "name": "AL5 / AL6 : tableaux de bord temps réel (historique rechargé par S3 au démarrage)",
+  "info": "",
+  "x": 250,
+  "y": 40,
+  "wires": []
+ },
+ {
+  "id": "b1c2d3e4f5a60011",
+  "type": "mqtt in",
+  "z": "b1c2d3e4f5a60001",
+  "name": "Mesures (S2)",
+  "topic": "pce92/mesures/+",
+  "qos": "1",
+  "datatype": "json",
+  "broker": "a1b2c3d4e5f60002",
+  "nl": false,
+  "rap": true,
+  "rh": 0,
+  "inputs": 0,
+  "x": 130,
+  "y": 100,
+  "wires": [
+   [
+    "b1c2d3e4f5a60014"
+   ]
+  ]
+ },
+ {
+  "id": "b1c2d3e4f5a60012",
+  "type": "mqtt in",
+  "z": "b1c2d3e4f5a60001",
+  "name": "Événements (S2)",
+  "topic": "pce92/evenements",
+  "qos": "1",
+  "datatype": "json",
+  "broker": "a1b2c3d4e5f60002",
+  "nl": false,
+  "rap": true,
+  "rh": 0,
+  "inputs": 0,
+  "x": 140,
+  "y": 160,
+  "wires": [
+   [
+    "b1c2d3e4f5a60014"
+   ]
+  ]
+ },
+ {
+  "id": "b1c2d3e4f5a60017",
+  "type": "mqtt in",
+  "z": "b1c2d3e4f5a60001",
+  "name": "Alertes du moteur (B2)",
+  "topic": "pce92/alertes/+",
+  "qos": "1",
+  "datatype": "json",
+  "broker": "a1b2c3d4e5f60002",
+  "nl": false,
+  "rap": true,
+  "rh": 0,
+  "inputs": 0,
+  "x": 170,
+  "y": 260,
+  "wires": [
+   [
+    "b1c2d3e4f5a60014"
+   ]
+  ]
+ },
+ {
+  "id": "b1c2d3e4f5a60018",
+  "type": "link in",
+  "z": "b1c2d3e4f5a60001",
+  "name": "Historique (S3)",
+  "links": [
+   "c1d2e3f4a5b60017"
+  ],
+  "x": 145,
+  "y": 300,
+  "wires": [
+   [
+    "b1c2d3e4f5a60014"
+   ]
+  ]
+ },
+ {
+  "id": "b1c2d3e4f5a60013",
+  "type": "inject",
+  "z": "b1c2d3e4f5a60001",
+  "name": "Tic 30 s",
+  "props": [
+   {
+    "p": "topic",
+    "vt": "str"
+   }
+  ],
+  "repeat": "30",
+  "crontab": "",
+  "once": true,
+  "onceDelay": "1",
+  "topic": "tic",
+  "x": 130,
+  "y": 220,
+  "wires": [
+   [
+    "b1c2d3e4f5a60014"
+   ]
+  ]
+ },
+ {
+  "id": "b1c2d3e4f5a60014",
+  "type": "function",
+  "z": "b1c2d3e4f5a60001",
+  "name": "Préparer l'affichage",
+  "func": "// AL5 / AL6 – Préparer l'affichage à partir des mesures (S2), des alertes du moteur (B2) et des événements.\n// Entrées : pce92/mesures/<node_id> (S2), pce92/alertes/<node_id> (moteur d'alerte de B2,\n//           plateforme/config/moteur_alerte.py), pce92/evenements (S2), et un « tic » toutes les 30 s.\n// Sorties : 1. vue simple (AL5)  2. vue technique (AL6)  3. courbe du niveau  4. courbe de la batterie\n// Les dates sont envoyées en ISO (UTC) et mises en forme dans le navigateur : les textes et les courbes\n// affichent ainsi la même heure, celle de l'appareil qui consulte (Paris pour l'équipe, Thiès sur place).\n//\n// Qui décide de l'état ? Le moteur d'alerte de B2. Il lit le seuil de chaque capteur dans\n// plateforme/config/seuils.csv et publie, à chaque mesure valide, un objet\n// { node_id, site, etat: normal|alerte|muet, cause, hauteur_mm, seuil_mm, tendance,\n//   vitesse_mm_h, temps_avant_depassement_min, received_at }.\n// Les vues affichent cet état tel quel. Elles ne le recalculent que si le moteur n'a encore rien publié\n// pour ce capteur (moteur arrêté) : c'est alors un calcul de secours, signalé comme tel dans la vue technique.\n// Dans tous les cas, sans mesure exploitable (capteur muet ou mesure invalide), aucun verdict n'est affiché.\n\n// --- Réglages de secours (utilisés seulement tant que le moteur n'a rien publié pour un capteur) ---\nconst SEUIL_SECOURS_MM = 300;    // repère de danger du contrat d'interface (bit d'alerte à 300 mm)\nconst AVANT_DEPASSEMENT_MAX_MIN = 120; // la vue simple n'annonce un dépassement que s'il est prévu dans les 2 h\nconst TENDANCE_MM = 20;          // écart minimal pour parler de hausse ou de baisse (calcul de secours)\nconst BATT_FAIBLE_V = 3.2;       // contrat v1.2, périmètre V2 : batterie faible sous 3,20 V\n// Libellés et actions par état, à faire valider par le client.\nconst ETATS = {\n    normal:       { libelle: \"NORMAL\", action: \"Surveillance : aucune action.\" },\n    alerte:       { libelle: \"ALERTE\", action: \"Prévenir les zones à risque et se préparer à évacuer.\" },\n    indisponible: { libelle: \"DONNÉES INDISPONIBLES\",\n                    action: \"Aucune mesure exploitable : la situation réelle est inconnue. Vérifier le capteur.\" }\n};\nconst CAUSES = { seuil: \"seuil dépassé\", montee_rapide: \"montée rapide : seuil bientôt atteint\" };\nconst TENDANCES = { montante: \"en hausse\", descendante: \"en baisse\", stable: \"stable\" };\n// ------------------------------------------------------------------------------------------\n\nconst etats = flow.get(\"etats\") || {};          // dernière mesure connue par capteur\nconst alertes = flow.get(\"alertes\") || {};      // dernier objet publié par le moteur, par capteur\nconst compteurs = flow.get(\"compteurs\") || { perdues: 0, doublons: 0, rejets: 0, retours_seq: 0, retards: 0 };\nconst retards = flow.get(\"retards\") || {};      // trames reçues en retard, par capteur (retirées des pertes)\nlet evenements = flow.get(\"evenements\") || [];  // 10 derniers événements\nconst sorties = [null, null, null, null, null];\nconst FENETRE_MS = 2 * 86400000;   // mini-courbes et courbes : 48 dernières heures\n\n// Trames perdues d'un capteur, sans celles finalement reçues en retard.\nfunction perduesNettes(id, e) { return Math.max(0, (e.perdues || 0) - (retards[id] || 0)); }\nfunction nomSite(id) { return (alertes[id] && alertes[id].site) || (\"Capteur n° \" + id); }\n// Noms des courbes : fixes (le nom du site arrive avec le moteur, il ne doit pas créer une 2e courbe).\nfunction courbe(id) { return \"Niveau – nœud \" + id; }\nfunction courbeSeuil(id) { return \"Seuil d'alerte – nœud \" + id; }\nfunction duree(min) {\n    const m = Math.round(min);\n    return m < 60 ? m + \" min\" : Math.floor(m / 60) + \" h \" + String(m % 60).padStart(2, \"0\");\n}\nfunction seuilConnu(id) { return alertes[id] ? alertes[id].seuil_mm : null; }\n\n// 1. Une nouvelle mesure\nif (msg.topic && msg.topic.startsWith(\"pce92/mesures/\")) {\n    const m = msg.payload;\n    const e = etats[m.node_id] || { node_id: m.node_id };\n    // Rechargement depuis la base (à chaque Deploy) : une mesure déjà affichée n'est pas recomptée.\n    if (msg.replay && e.derniere && Date.parse(m.received_at) <= Date.parse(e.derniere.received_at)) return null;\n    if (m.water_valid) {\n        e.precedent_mm = e.dernier_valide ? e.dernier_valide.water_mm : null;\n        e.dernier_valide = m;\n    }\n    e.derniere = m;\n    // Heure d'arrivée dans Node-RED (sert à repérer un capteur muet). Pour l'historique\n    // rechargé depuis la base (S3), on reprend l'heure de réception d'origine.\n    e.arrivee = msg.replay ? Date.parse(m.received_at) : Date.now();\n    etats[m.node_id] = e;\n    const x = Date.parse(m.received_at);\n    const niveau = [];\n    const batterie = [];\n    // La ligne de seuil d'abord (1re couleur : rouge). Seuil du moteur s'il est connu ; sinon le seuil\n    // de secours, ou un point vide si le moteur tourne déjà (son seuil arrive juste après la mesure).\n    const moteurActif = Object.keys(alertes).length > 0;\n    const s = seuilConnu(m.node_id);\n    niveau.push({ payload: { serie: courbeSeuil(m.node_id), x: x, y: s !== null ? s : (moteurActif ? null : SEUIL_SECOURS_MM) } });\n    // Trames perdues juste avant : on coupe la courbe (point vide au milieu du trou),\n    // pour ne pas tracer une ligne qui inventerait des mesures jamais reçues.\n    if (m.lost_before > 0) {\n        const xTrou = x - ((m.next_min || 30) * 60000) / 2;\n        niveau.push({ payload: { serie: courbe(m.node_id), x: xTrou, y: null } });\n        batterie.push({ payload: { serie: courbe(m.node_id).replace(\"Niveau\", \"Batterie\"), x: xTrou, y: null } });\n    }\n    // Mesure invalide (0xFFFF) : point vide, la courbe est coupée à cet endroit.\n    niveau.push({ payload: { serie: courbe(m.node_id), x: x, y: m.water_valid ? m.water_mm : null } });\n    batterie.push({ payload: { serie: courbe(m.node_id).replace(\"Niveau\", \"Batterie\"), x: x, y: m.batt_v } });\n    // Les courbes ne montrent qu'un capteur à la fois (choisi au-dessus des courbes) : par défaut le premier reçu.\n    if (flow.get(\"capteur_courbe\") === undefined) flow.set(\"capteur_courbe\", m.node_id);\n    if (flow.get(\"capteur_courbe\") === m.node_id) {\n        sorties[2] = niveau;\n        sorties[3] = batterie;\n    }\n    // Points des 48 dernières heures pour la mini-courbe de la tuile (null = trou).\n    e.points = (e.points || []).filter(p => p.x > Date.now() - FENETRE_MS);\n    if (m.lost_before > 0) e.points.push({ x: x - ((m.next_min || 30) * 60000) / 2, y: null });\n    e.points.push({ x: x, y: m.water_valid ? m.water_mm : null });\n    e.perdues = (e.perdues || 0) + (m.lost_before || 0);\n    e.recues = (e.recues || 0) + 1;\n}\n\n// 2. Un objet d'alerte publié par le moteur de B2\nif (msg.topic && msg.topic.startsWith(\"pce92/alertes/\")) {\n    const a = msg.payload || {};\n    if (a.node_id !== undefined && [\"normal\", \"alerte\", \"muet\"].includes(a.etat)) {\n        const avant = alertes[a.node_id];\n        alertes[a.node_id] = a;\n        // Seuil reçu pour la 1re fois, ou modifié dans seuils.csv : on place le point sur la ligne de seuil.\n        // (Seulement si ce capteur a déjà des mesures affichées : au démarrage, les alertes mémorisées par MQTT\n        //  arrivent avant l'historique, et ne doivent pas prendre les premières couleurs de la courbe.)\n        if (a.received_at && etats[a.node_id] && flow.get(\"capteur_courbe\") === a.node_id && (!avant || avant.seuil_mm !== a.seuil_mm)) {\n            sorties[2] = [{ payload: { serie: courbeSeuil(a.node_id), x: Date.parse(a.received_at), y: a.seuil_mm } }];\n        }\n    } else {\n        node.warn(\"Objet d'alerte ignoré (etat inconnu) : \" + JSON.stringify(a));\n    }\n}\n\n// 3. Un événement (rejet, doublon, trames perdues, retour de seq)\nif (msg.topic === \"pce92/evenements\") {\n    const ev = msg.payload;\n    // Rechargement depuis la base (à chaque Deploy) : un événement déjà compté ne l'est pas deux fois.\n    const evtsVus = flow.get(\"evts_vus\") || [];\n    const cleEvt = [ev.type, ev.node_id, ev.seq, ev.received_at].join(\"|\");\n    if (evtsVus.includes(cleEvt)) return null;\n    evtsVus.push(cleEvt);\n    flow.set(\"evts_vus\", evtsVus.slice(-1000));\n    if (ev.type === \"doublon\") compteurs.doublons += 1;\n    if (ev.type === \"rejet\") compteurs.rejets += 1;\n    if (ev.type === \"retour_seq\") compteurs.retours_seq += 1;\n    if (ev.type === \"trame_en_retard\") {\n        compteurs.retards = (compteurs.retards || 0) + 1;\n        retards[ev.node_id] = (retards[ev.node_id] || 0) + 1;\n    }\n    const textes = {\n        trames_perdues: (ev.nombre + \" trame(s) perdue(s) avant la seq \" + ev.seq),\n        doublon: (ev.en_retard ? \"doublon arrivé en retard, écarté (seq \" + ev.seq + \", \" + ev.retard_trames + \" trame(s) de retard)\"\n                               : \"doublon écarté (seq \" + ev.seq + \")\"),\n        trame_en_retard: (\"trame perdue finalement reçue en retard (seq \" + ev.seq + \") : gardée dans l'historique, pas affichée comme mesure actuelle\"),\n        rejet: (\"trame rejetée : \" + ev.raison),\n        retour_seq: (\"compteur revenu en arrière (\" + ev.seq_precedent + \" → \" + ev.seq + \")\")\n    };\n    evenements.unshift({ heure_iso: ev.received_at || new Date().toISOString(),\n                         capteur: ev.node_id ?? \"—\", texte: textes[ev.type] || ev.type });\n    evenements = evenements.slice(0, 10);\n}\n\nflow.set(\"etats\", etats);\nflow.set(\"alertes\", alertes);\nflow.set(\"compteurs\", compteurs);\nflow.set(\"retards\", retards);\nflow.set(\"evenements\", evenements);\n\n// 4. Recalculer les deux vues (à chaque message, y compris le tic de 30 s)\nconst sites = [], lignes = [];\nlet derniereReception = null;\nfor (const id of Object.keys(etats).sort((a, b) => a - b)) {\n    const e = etats[id];\n    const d = e.derniere;\n    const v = e.dernier_valide;\n    const a = alertes[id];\n    const periode = d.next_min || 60;\n    // Capteur muet : aucune nouvelle trame depuis 2 × next_min + 5 min (même délai que le moteur\n    // d'alerte de B2) : une trame perdue est tolérée, deux ne le sont pas.\n    const delaiMuetMin = 2 * periode + 5;\n    const muet = Date.now() > (e.arrivee || Date.parse(d.received_at)) + delaiMuetMin * 60000\n                 || (a && a.etat === \"muet\");\n\n    // État : celui du moteur s'il a publié pour ce capteur, sinon calcul de secours sur le seuil de secours.\n    let etat, source, cause = null, tendance = \"\", vitesse = null, avantDepassement = null, seuil;\n    if (a) {\n        etat = a.etat === \"alerte\" ? \"alerte\" : \"normal\";\n        cause = a.cause;\n        seuil = a.seuil_mm;\n        tendance = TENDANCES[a.tendance] || \"\";\n        vitesse = a.vitesse_mm_h;\n        avantDepassement = a.temps_avant_depassement_min;\n        // Le moteur n'a pas encore répondu à la dernière mesure valide (normal pendant une fraction de seconde ;\n        // s'il dure, le moteur est sans doute arrêté) : on le signale dans la vue technique.\n        const enRetard = v && a.received_at !== v.received_at && Date.now() - e.arrivee > 10000;\n        source = enRetard ? \"moteur d'alerte (n'a pas répondu à la dernière mesure)\" : \"moteur d'alerte\";\n    } else {\n        seuil = SEUIL_SECOURS_MM;\n        etat = (v && v.water_mm >= seuil) || d.alert ? \"alerte\" : \"normal\";  // règle 3 : le bit d'alerte compte\n        if (etat === \"alerte\") cause = \"seuil\";\n        if (v && e.precedent_mm !== null && e.precedent_mm !== undefined) {\n            const diff = v.water_mm - e.precedent_mm;\n            tendance = diff >= TENDANCE_MM ? \"en hausse\" : (diff <= -TENDANCE_MM ? \"en baisse\" : \"stable\");\n        }\n        source = \"calcul de secours (moteur absent)\";\n    }\n    // Sans mesure exploitable, pas de verdict : jamais de NORMAL pour un capteur muet.\n    const sansVerdict = muet || !d.water_valid;\n    if (sansVerdict) { etat = \"indisponible\"; cause = null; tendance = \"\"; avantDepassement = null; }\n\n    let precision = \"\";\n    if (etat === \"alerte\" && CAUSES[cause]) precision = CAUSES[cause];\n    // Niveau repassé sous le seuil mais alerte maintenue par le moteur (marge de retour, pour ne pas clignoter).\n    if (etat === \"alerte\" && cause === \"seuil\" && v && seuil && v.water_mm < seuil)\n        precision = \"niveau juste sous le seuil : alerte maintenue jusqu'à une vraie baisse\";\n    // Vue simple : on n'annonce le dépassement que s'il est proche (moins de 2 h), sinon le chiffre n'a pas de sens.\n    if (etat === \"normal\" && avantDepassement !== null && avantDepassement !== undefined && avantDepassement <= AVANT_DEPASSEMENT_MAX_MIN)\n        precision = \"seuil atteint dans \" + duree(avantDepassement) + \" environ, au rythme actuel\";\n\n    sites.push({\n        node_id: Number(id), nom: nomSite(id), etat: etat,\n        libelle: ETATS[etat].libelle, action: ETATS[etat].action, precision: precision,\n        niveau: v ? Math.round(v.water_mm / 10) + \" cm\" : \"—\",\n        seuil: seuil !== null && seuil !== undefined ? Math.round(seuil / 10) + \" cm\" : \"—\",\n        ancien: sansVerdict ? (v ? \"Dernier niveau connu : \" + Math.round(v.water_mm / 10) + \" cm\" : \"Aucun niveau connu\") : \"\",\n        ancien_iso: sansVerdict && v ? v.received_at : null,\n        tendance: tendance,\n        derniere_iso: d.received_at\n    });\n    // Gravité, pour trier : 0 alerte, 1 données indisponibles, 2 dépassement proche, 3 normal.\n    const rang = etat === \"alerte\" ? 0 : (etat === \"indisponible\" ? 1 : (precision ? 2 : 3));\n    sites[sites.length - 1].rang = rang;\n    lignes.push({\n        node_id: Number(id), nom: nomSite(id), rang: rang, cle_etat: etat, precision: precision,\n        niveau_mm: v ? v.water_mm : null, seuil_mm: seuil ?? null,\n        points: (e.points || []).filter(p => p.x > Date.now() - FENETRE_MS), etat: ETATS[etat].libelle + (etat === \"alerte\" && cause ? \" (\" + cause + \")\" : \"\"),\n        source: sansVerdict ? \"—\" : source,\n        reception: muet ? \"en retard\" : (d.water_valid ? \"à jour\" : \"mesure invalide\"),\n        derniere_iso: d.received_at,\n        prochaine_iso: d.expected_next_at,\n        niveau: d.water_valid ? d.water_mm + \" mm\" : \"invalide\",\n        seuil: seuil !== null && seuil !== undefined ? seuil + \" mm\" : \"—\",\n        tendance: sansVerdict ? \"—\" : (tendance || \"—\") + (vitesse !== null && vitesse !== undefined ? \" (\" + vitesse + \" mm/h)\" : \"\"),\n        depassement: sansVerdict || avantDepassement === null || avantDepassement === undefined ? \"—\" : duree(avantDepassement),\n        bit: d.alert ? \"levé\" : \"non\",\n        batterie: d.batt_v === null ? \"inconnue\" : d.batt_v.toFixed(2) + \" V\" + (d.batt_v < BATT_FAIBLE_V ? \" (faible)\" : \"\"),\n        batt_faible: d.batt_v !== null && d.batt_v < BATT_FAIBLE_V,\n        signal: (d.rssi ?? \"—\") + \" dBm / \" + (d.snr ?? \"—\") + \" dB\",\n        seq: d.seq,\n        perdues: perduesNettes(id, e),\n        taux: e.recues ? Math.round(100 * (e.recues + (retards[id] || 0)) / (e.recues + (retards[id] || 0) + perduesNettes(id, e))) + \" %\" : \"—\"\n    });\n    if (!derniereReception || d.received_at > derniereReception) derniereReception = d.received_at;\n}\n\n// Tri par gravité (le plus urgent en haut), puis par numéro de capteur.\nconst parGravite = (a, b) => (a.rang - b.rang) || (a.node_id - b.node_id);\nsites.sort(parGravite);\nlignes.sort(parGravite);\n\n// Capteur affiché dans les grandes courbes : celui choisi par un clic (capteur_manuel) ; sans clic, le plus\n// critique. Pas pendant le rechargement de l'historique.\n// Un capteur qui ENTRE en alerte remplace le choix de l'expert : la courbe bascule sur ce capteur.\nconst enAlerte = lignes.filter(l => l.rang === 0).map(l => l.node_id);\nconst avantAlerte = flow.get(\"ids_en_alerte\") || [];\nconst nouvelle = enAlerte.find(id => !avantAlerte.includes(id));\nif (!msg.replay && nouvelle !== undefined) flow.set(\"capteur_manuel\", nouvelle);\nflow.set(\"ids_en_alerte\", enAlerte);\nif (!msg.replay && lignes.length) {\n    const manuel = lignes.find(l => l.node_id === flow.get(\"capteur_manuel\"));\n    const voulu = manuel ? manuel.node_id : lignes[0].node_id;\n    if (voulu !== flow.get(\"capteur_courbe\")) sorties[4] = { payload: { node_id: voulu, auto: true } };\n}\n\n// Total des trames perdues = somme par capteur (recalculée aussi après un redémarrage, grâce à S3).\ncompteurs.perdues = Object.keys(etats).reduce((t, id) => t + perduesNettes(id, etats[id]), 0);\nsorties[0] = { payload: { sites: sites } };\nsorties[1] = { payload: {\n    capteurs: lignes, compteurs: compteurs, evenements: evenements,\n    derniere_reception_iso: derniereReception, capteur_courbe: flow.get(\"capteur_courbe\") ?? null\n} };\nreturn sorties;\n",
+  "outputs": 5,
+  "timeout": 0,
+  "noerr": 0,
+  "initialize": "",
+  "finalize": "",
+  "libs": [],
+  "outputLabels": [
+   "vue simple",
+   "vue technique",
+   "courbe niveau",
+   "courbe batterie",
+   "changer le capteur des courbes"
+  ],
+  "x": 380,
+  "y": 160,
+  "wires": [
+   [
+    "b1c2d3e4f5a60020"
+   ],
+   [
+    "b1c2d3e4f5a60021",
+    "b1c2d3e4f5a60050"
+   ],
+   [
+    "b1c2d3e4f5a60022"
+   ],
+   [
+    "b1c2d3e4f5a60023"
+   ],
+   [
+    "b1c2d3e4f5a60051"
+   ]
+  ]
+ },
+ {
+  "id": "b1c2d3e4f5a60015",
+  "type": "inject",
+  "z": "b1c2d3e4f5a60001",
+  "name": "Réinitialiser l'affichage",
+  "props": [],
+  "repeat": "",
+  "crontab": "",
+  "once": false,
+  "onceDelay": "0.1",
+  "topic": "",
+  "x": 160,
+  "y": 380,
+  "wires": [
+   [
+    "b1c2d3e4f5a60016"
+   ]
+  ]
+ },
+ {
+  "id": "b1c2d3e4f5a60016",
+  "type": "function",
+  "z": "b1c2d3e4f5a60001",
+  "name": "Tout effacer",
+  "func": "// Efface l'état mémorisé et vide les deux courbes (utile avant une démonstration).\nflow.set(\"etats\", {});\nflow.set(\"alertes\", {});\nflow.set(\"compteurs\", { perdues: 0, doublons: 0, rejets: 0, retours_seq: 0, retards: 0 });\nflow.set(\"retards\", {});\nflow.set(\"evts_vus\", []);\nflow.set(\"evenements\", []);\nflow.set(\"capteur_courbe\", undefined);\nflow.set(\"capteur_manuel\", undefined);\nflow.set(\"ids_en_alerte\", []);\nnode.status({ fill: \"blue\", shape: \"dot\", text: \"réinitialisé à \" + new Date().toLocaleTimeString(\"fr-FR\") });\nreturn [{ payload: [] }, { topic: \"tic\" }];\n",
+  "outputs": 2,
+  "timeout": 0,
+  "noerr": 0,
+  "initialize": "",
+  "finalize": "",
+  "libs": [],
+  "outputLabels": [
+   "vider les courbes",
+   "recalculer les vues"
+  ],
+  "x": 380,
+  "y": 380,
+  "wires": [
+   [
+    "b1c2d3e4f5a60022",
+    "b1c2d3e4f5a60023"
+   ],
+   [
+    "b1c2d3e4f5a60014"
+   ]
+  ]
+ },
+ {
+  "id": "b1c2d3e4f5a60020",
+  "type": "ui-template",
+  "z": "b1c2d3e4f5a60001",
+  "group": "b1c2d3e4f5a60006",
+  "page": "",
+  "ui": "",
+  "name": "AL5 – Vue simple",
+  "order": 1,
+  "width": "6",
+  "height": "0",
+  "head": "",
+  "format": "<template>\n  <div class=\"al5\">\n    <p v-if=\"!sites.length\" class=\"attente\">En attente des premières mesures…</p>\n    <div v-for=\"s in sites\" :key=\"s.node_id\" class=\"carte\" :class=\"s.etat\">\n      <div class=\"bandeau\">{{ s.libelle }}</div>\n      <div class=\"corps\">\n        <div class=\"site\">{{ s.nom }}</div>\n        <div class=\"echelle\" aria-label=\"État\">\n          <span v-for=\"p in echelle\" :key=\"p.cle\" class=\"seg\" :class=\"[p.cle, { actif: s.etat === p.cle }]\">{{ p.nom }}</span>\n        </div>\n        <template v-if=\"s.ancien\">\n          <div class=\"ancien\">{{ s.ancien }}<span v-if=\"s.ancien_iso\"> (mesure du {{ heure(s.ancien_iso) }})</span></div>\n        </template>\n        <template v-else>\n          <div class=\"niveau\">{{ s.niveau }} <span v-if=\"s.tendance\" class=\"tendance\">· {{ s.tendance }}</span></div>\n          <div class=\"seuil\">Seuil d'alerte : {{ s.seuil }}</div>\n          <div v-if=\"s.precision\" class=\"precision\">{{ s.precision }}</div>\n        </template>\n        <div class=\"action\">{{ s.action }}</div>\n        <div class=\"maj\">Dernière mesure : {{ heure(s.derniere_iso) }} ({{ depuis(s.derniere_iso) }})</div>\n      </div>\n    </div>\n  </div>\n</template>\n\n<script>\nexport default {\n  data () {\n    return { echelle: [{ cle: 'normal', nom: 'Normal' }, { cle: 'alerte', nom: 'Alerte' }] }\n  },\n  computed: {\n    sites () { return (this.msg && this.msg.payload && this.msg.payload.sites) || [] }\n  },\n  methods: {\n    heure (iso) {\n      return iso ? new Date(iso).toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—'\n    },\n    depuis (iso) {\n      if (!iso) return ''\n      const min = Math.round((Date.now() - Date.parse(iso)) / 60000)\n      if (min < 1) return \"à l'instant\"\n      if (min < 60) return 'il y a ' + min + ' min'\n      if (min < 2880) return 'il y a ' + Math.floor(min / 60) + ' h ' + String(min % 60).padStart(2, '0')\n      return 'il y a ' + Math.floor(min / 1440) + ' jours'\n    }\n  }\n}\n</script>\n\n<style scoped>\n.al5 { display: flex; flex-direction: column; gap: 16px; width: 100%; }\n.attente { color: #5f6368; font-size: 1.1rem; }\n.carte { border-radius: 12px; overflow: hidden; border: 2px solid; background: #ffffff; }\n.bandeau { padding: 14px 18px; font-size: 1.5rem; font-weight: 700; color: #ffffff; }\n.corps { padding: 14px 18px; color: #202124; }\n.site { font-size: 1rem; color: #5f6368; }\n.echelle { display: flex; gap: 4px; margin: 10px 0; }\n.seg { flex: 1; text-align: center; padding: 6px 0; border-radius: 6px; font-size: 0.85rem; font-weight: 600;\n       opacity: 0.25; color: #ffffff; }\n.seg.actif { opacity: 1; outline: 3px solid #202124; outline-offset: 1px; }\n.seg.normal { background: #1e7b34; } .seg.alerte { background: #b3261e; }\n.niveau { font-size: 2.4rem; font-weight: 700; margin: 4px 0; }\n.tendance { font-size: 1.1rem; font-weight: 500; color: #5f6368; }\n.ancien { font-size: 1.05rem; color: #5f6368; margin: 6px 0; }\n.action { font-size: 1.1rem; margin: 8px 0; }\n.maj { font-size: 0.95rem; color: #5f6368; }\n.seuil { font-size: 1rem; color: #5f6368; }\n.precision { font-size: 1.05rem; font-weight: 600; margin: 6px 0; }\n.normal { border-color: #1e7b34; } .normal .bandeau { background: #1e7b34; }\n.alerte { border-color: #b3261e; } .alerte .bandeau { background: #b3261e; }\n.alerte .precision { color: #b3261e; }\n.indisponible { border-color: #5f6368; } .indisponible .bandeau { background: #5f6368; }\n</style>",
+  "storeOutMessages": true,
+  "passthru": false,
+  "resendOnRefresh": true,
+  "templateScope": "local",
+  "className": "",
+  "x": 640,
+  "y": 100,
+  "wires": [
+   []
+  ]
+ },
+ {
+  "id": "b1c2d3e4f5a60021",
+  "type": "ui-template",
+  "z": "b1c2d3e4f5a60001",
+  "group": "b1c2d3e4f5a60008",
+  "page": "",
+  "ui": "",
+  "name": "AL6 – Capteurs et événements",
+  "order": 1,
+  "width": "12",
+  "height": "0",
+  "head": "",
+  "format": "<template>\n  <div class=\"al6\">\n    <p class=\"recepteur\">Récepteur : <strong>{{ d.derniere_reception_iso ? 'dernière trame reçue le ' + heure(d.derniere_reception_iso) + ' (' + depuis(d.derniere_reception_iso) + ')' : 'aucune trame reçue' }}</strong></p>\n    <p class=\"fuseau\">Heures affichées : heure locale de cet appareil ({{ fuseau }}). Courbes : 48 dernières heures ; compteurs et événements : 7 derniers jours. Au-delà : page Historique.</p>\n\n    <div class=\"compteurs\">\n      <div><span>{{ c.perdues || 0 }}</span>trames perdues</div>\n      <div><span>{{ c.doublons || 0 }}</span>doublons écartés</div>\n      <div><span>{{ c.rejets || 0 }}</span>trames rejetées</div>\n      <div><span>{{ c.retours_seq || 0 }}</span>retours de seq</div>\n      <div><span>{{ c.retards || 0 }}</span>trames reçues en retard</div>\n    </div>\n\n    <h4>Capteurs</h4>\n    <table>\n      <thead><tr><th>Site</th><th>État</th><th>Réception</th><th>Dernière trame</th><th>Prochaine attendue</th>\n        <th>Niveau</th><th>Seuil</th><th>Tendance</th><th>Avant dépassement</th><th>Bit d'alerte</th><th>Batterie</th>\n        <th>Signal<br>RSSI / SNR</th><th>seq</th><th>Trames perdues</th><th>Taux de réception</th></tr></thead>\n      <tbody>\n        <tr v-for=\"l in (d.capteurs || [])\" :key=\"l.nom\">\n          <td>{{ l.nom }}</td><td>{{ l.etat }}<br><span class=\"petit\">{{ l.source }}</span></td>\n          <td :class=\"l.reception !== 'à jour' ? 'retard' : ''\">{{ l.reception }}</td>\n          <td>{{ heure(l.derniere_iso) }}<br><span class=\"petit\">{{ depuis(l.derniere_iso) }}</span></td>\n          <td>{{ l.prochaine_iso ? heure(l.prochaine_iso) : 'inconnue' }}</td><td>{{ l.niveau }}</td>\n          <td>{{ l.seuil }}</td><td>{{ l.tendance }}</td><td>{{ l.depassement }}</td><td>{{ l.bit }}</td>\n          <td :class=\"l.batt_faible ? 'retard' : ''\">{{ l.batterie }}</td><td>{{ l.signal }}</td><td>{{ l.seq }}</td>\n          <td :class=\"l.perdues ? 'retard' : ''\">{{ l.perdues }}</td><td>{{ l.taux }}</td>\n        </tr>\n      </tbody>\n    </table>\n\n    <h4>Derniers événements</h4>\n    <p v-if=\"!(d.evenements || []).length\" class=\"vide\">Aucun événement.</p>\n    <ul>\n      <li v-for=\"(e, i) in (d.evenements || [])\" :key=\"i\">{{ heure(e.heure_iso) }} · capteur {{ e.capteur }} · {{ e.texte }}</li>\n    </ul>\n  </div>\n</template>\n\n<script>\nexport default {\n  computed: {\n    d () { return (this.msg && this.msg.payload) || {} },\n    c () { return this.d.compteurs || {} },\n    fuseau () { return Intl.DateTimeFormat().resolvedOptions().timeZone }\n  },\n  methods: {\n    heure (iso) {\n      return iso ? new Date(iso).toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—'\n    },\n    depuis (iso) {\n      if (!iso) return ''\n      const min = Math.round((Date.now() - Date.parse(iso)) / 60000)\n      if (min < 1) return \"à l'instant\"\n      if (min < 60) return 'il y a ' + min + ' min'\n      if (min < 2880) return 'il y a ' + Math.floor(min / 60) + ' h ' + String(min % 60).padStart(2, '0')\n      return 'il y a ' + Math.floor(min / 1440) + ' jours'\n    }\n  }\n}\n</script>\n\n<style scoped>\n.al6 { width: 100%; color: #202124; overflow-x: auto; }\n.recepteur { margin: 0 0 4px; }\n.fuseau { margin: 0 0 12px; font-size: 0.85rem; color: #5f6368; }\n.compteurs { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 16px; }\n.compteurs div { border: 1px solid #d9d9e0; border-radius: 8px; padding: 8px 14px; min-width: 120px; color: #5f6368; }\n.compteurs span { display: block; font-size: 1.6rem; font-weight: 700; color: #202124; }\nh4 { margin: 16px 0 8px; }\ntable { border-collapse: collapse; width: 100%; font-size: 0.9rem; }\nth, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #e5e5e5; vertical-align: top; }\n.petit { font-size: 0.8rem; color: #5f6368; }\nth { color: #5f6368; font-weight: 600; }\n.retard { color: #b3261e; font-weight: 600; }\nul { margin: 0; padding-left: 18px; font-size: 0.9rem; }\n.vide { color: #5f6368; }\n</style>",
+  "storeOutMessages": true,
+  "passthru": false,
+  "resendOnRefresh": true,
+  "templateScope": "local",
+  "className": "",
+  "x": 660,
+  "y": 160,
+  "wires": [
+   []
+  ]
+ },
+ {
+  "id": "b1c2d3e4f5a60022",
+  "type": "ui-chart",
+  "z": "b1c2d3e4f5a60001",
+  "group": "b1c2d3e4f5a60007",
+  "name": "AL6 – Courbe du niveau",
+  "label": "Niveau d'eau (mm) et seuil d'alerte – 48 dernières heures",
+  "order": 2,
+  "chartType": "line",
+  "category": "serie",
+  "categoryType": "property",
+  "xAxisLabel": "",
+  "xAxisProperty": "x",
+  "xAxisPropertyType": "property",
+  "xAxisType": "time",
+  "xAxisFormat": "{dd}/{MM} {HH}:{mm}",
+  "xAxisFormatType": "custom",
+  "xmin": "",
+  "xmax": "",
+  "yAxisLabel": "mm",
+  "yAxisProperty": "y",
+  "yAxisPropertyType": "property",
+  "ymin": "0",
+  "ymax": "",
+  "bins": 10,
+  "action": "append",
+  "stackSeries": false,
+  "pointShape": "circle",
+  "pointRadius": 3,
+  "showLegend": true,
+  "removeOlder": "2",
+  "removeOlderUnit": "86400",
+  "removeOlderPoints": "2000",
+  "colors": [
+   "#B3261E",
+   "#0095FF",
+   "#2CA02C",
+   "#A347E1",
+   "#8C564B",
+   "#17BECF",
+   "#7F7F7F",
+   "#FF7F0E",
+   "#9467BD"
+  ],
+  "textColor": [
+   "#666666"
+  ],
+  "textColorDefault": true,
+  "gridColor": [
+   "#e5e5e5"
+  ],
+  "gridColorDefault": true,
+  "width": "12",
+  "height": "6",
+  "className": "",
+  "interpolation": "linear",
+  "x": 640,
+  "y": 220,
+  "wires": [
+   []
+  ]
+ },
+ {
+  "id": "b1c2d3e4f5a60023",
+  "type": "ui-chart",
+  "z": "b1c2d3e4f5a60001",
+  "group": "b1c2d3e4f5a60007",
+  "name": "AL6 – Courbe de la batterie",
+  "label": "Batterie (V) – 48 dernières heures",
+  "order": 3,
+  "chartType": "line",
+  "category": "serie",
+  "categoryType": "property",
+  "xAxisLabel": "",
+  "xAxisProperty": "x",
+  "xAxisPropertyType": "property",
+  "xAxisType": "time",
+  "xAxisFormat": "{dd}/{MM} {HH}:{mm}",
+  "xAxisFormatType": "custom",
+  "xmin": "",
+  "xmax": "",
+  "yAxisLabel": "V",
+  "yAxisProperty": "y",
+  "yAxisPropertyType": "property",
+  "ymin": "2.5",
+  "ymax": "3.8",
+  "bins": 10,
+  "action": "append",
+  "stackSeries": false,
+  "pointShape": "circle",
+  "pointRadius": 3,
+  "showLegend": true,
+  "removeOlder": "2",
+  "removeOlderUnit": "86400",
+  "removeOlderPoints": "2000",
+  "colors": [
+   "#0095FF",
+   "#2CA02C",
+   "#A347E1",
+   "#8C564B",
+   "#17BECF",
+   "#7F7F7F",
+   "#FF7F0E",
+   "#D62728",
+   "#9467BD"
+  ],
+  "textColor": [
+   "#666666"
+  ],
+  "textColorDefault": true,
+  "gridColor": [
+   "#e5e5e5"
+  ],
+  "gridColorDefault": true,
+  "width": "12",
+  "height": "6",
+  "className": "",
+  "interpolation": "linear",
+  "x": 650,
+  "y": 280,
+  "wires": [
+   []
+  ]
+ },
+ {
+  "id": "b1c2d3e4f5a60050",
+  "type": "ui-template",
+  "z": "b1c2d3e4f5a60001",
+  "group": "b1c2d3e4f5a60007",
+  "page": "",
+  "ui": "",
+  "name": "AL6 – Tuiles des capteurs",
+  "order": 1,
+  "width": "12",
+  "height": "0",
+  "head": "",
+  "format": "<template>\n  <div class=\"grille\">\n    <p v-if=\"!capteurs.length\" class=\"vide\">En attente des premières mesures…</p>\n    <button v-for=\"c in capteurs\" :key=\"c.node_id\" class=\"tuile\" :class=\"[c.cle_etat, { choisie: c.node_id === choisi }]\"\n            @click=\"choisir(c.node_id)\" :aria-pressed=\"c.node_id === choisi\">\n      <div class=\"haut\">\n        <span class=\"nom\">{{ c.nom }}</span>\n        <span class=\"etat\">{{ libelle(c) }}</span>\n      </div>\n      <div class=\"valeur\">\n        <span class=\"mm\">{{ c.niveau_mm !== null ? c.niveau_mm + ' mm' : '—' }}</span>\n        <span class=\"tend\">{{ c.tendance !== '—' ? c.tendance : '' }}</span>\n      </div>\n      <svg viewBox=\"0 0 200 50\" preserveAspectRatio=\"none\" class=\"mini\" aria-hidden=\"true\">\n        <line v-if=\"c.seuil_mm\" x1=\"0\" x2=\"200\" :y1=\"y(c, c.seuil_mm)\" :y2=\"y(c, c.seuil_mm)\" class=\"seuil\" />\n        <path :d=\"chemin(c)\" class=\"courbe\" />\n      </svg>\n      <div class=\"bas\">\n        <span>seuil {{ c.seuil }}</span>\n        <span :class=\"{ rouge: c.perdues }\">{{ c.perdues }} perdue(s)</span>\n        <span :class=\"{ rouge: c.reception !== 'à jour' }\">{{ depuis(c.derniere_iso) }}</span>\n      </div>\n      <div v-if=\"c.precision\" class=\"precision\">{{ c.precision }}</div>\n    </button>\n    <p v-if=\"capteurs.length\" class=\"aide\">Triés du plus urgent au moins urgent · mini-courbes sur 48 h · cliquer sur une tuile pour afficher ses courbes en grand ci-dessous (un capteur en alerte s'affiche automatiquement).</p>\n  </div>\n</template>\n\n<script>\nexport default {\n  computed: {\n    capteurs () { return (this.msg && this.msg.payload && this.msg.payload.capteurs) || [] },\n    choisi () { return this.msg && this.msg.payload ? this.msg.payload.capteur_courbe : null }\n  },\n  methods: {\n    choisir (id) { this.send({ payload: { node_id: id } }) },\n    libelle (c) { return { alerte: 'ALERTE', indisponible: 'INDISPONIBLE', normal: 'NORMAL' }[c.cle_etat] || '' },\n    haut (c) {\n      const ys = (c.points || []).map(p => p.y).filter(v => v !== null)\n      return Math.max(c.seuil_mm || 0, ...ys, 1) * 1.15\n    },\n    y (c, v) { return 48 - (v / this.haut(c)) * 46 },\n    chemin (c) {\n      // Même axe de temps pour toutes les tuiles : de la plus ancienne mesure affichée (48 h au plus) à maintenant.\n      const fin = Date.now()\n      const xs = this.capteurs.flatMap(k => (k.points || []).map(p => p.x))\n      const debut = xs.length ? Math.min(...xs) : fin - 2 * 86400000\n      let d = '', leve = true\n      for (const p of (c.points || [])) {\n        if (p.y === null) { leve = true; continue }\n        const x = Math.max(0, Math.min(200, ((p.x - debut) / (fin - debut)) * 200))\n        d += (leve ? 'M' : 'L') + x.toFixed(1) + ' ' + this.y(c, p.y).toFixed(1) + ' '\n        leve = false\n      }\n      return d\n    },\n    depuis (iso) {\n      if (!iso) return ''\n      const min = Math.round((Date.now() - Date.parse(iso)) / 60000)\n      if (min < 1) return \"à l'instant\"\n      if (min < 60) return 'il y a ' + min + ' min'\n      if (min < 2880) return 'il y a ' + Math.floor(min / 60) + ' h'\n      return 'il y a ' + Math.floor(min / 1440) + ' j'\n    }\n  }\n}\n</script>\n\n<style scoped>\n.grille { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; width: 100%; }\n.vide, .aide { grid-column: 1 / -1; color: #5f6368; font-size: 0.85rem; margin: 0; }\n.tuile { text-align: left; background: #ffffff; border: 1px solid #d9d9e0; border-left: 6px solid #9aa0a6; border-radius: 8px;\n         padding: 10px 12px; cursor: pointer; font: inherit; color: #202124; display: flex; flex-direction: column; gap: 4px; }\n.tuile:hover { box-shadow: 0 1px 4px rgba(0,0,0,0.15); }\n.tuile.choisie { outline: 3px solid #1f3a5f; outline-offset: 1px; }\n.haut { display: flex; justify-content: space-between; align-items: center; gap: 8px; }\n.nom { font-weight: 600; }\n.etat { font-size: 0.75rem; font-weight: 700; padding: 2px 6px; border-radius: 4px; color: #ffffff; background: #9aa0a6; }\n.normal { border-left-color: #1e7b34; } .normal .etat { background: #1e7b34; }\n.alerte { border-left-color: #b3261e; background: #fdf3f2; } .alerte .etat { background: #b3261e; }\n.indisponible { border-left-color: #5f6368; } .indisponible .etat { background: #5f6368; }\n.valeur { display: flex; align-items: baseline; gap: 8px; }\n.mm { font-size: 1.4rem; font-weight: 700; }\n.tend { font-size: 0.85rem; color: #5f6368; }\n.mini { width: 100%; height: 50px; }\n.seuil { stroke: #b3261e; stroke-width: 1; stroke-dasharray: 4 3; vector-effect: non-scaling-stroke; }\n.courbe { fill: none; stroke: #0b6bcb; stroke-width: 2; vector-effect: non-scaling-stroke; }\n.bas { display: flex; justify-content: space-between; gap: 6px; font-size: 0.8rem; color: #5f6368; }\n.rouge { color: #b3261e; font-weight: 600; }\n.precision { font-size: 0.8rem; font-weight: 600; color: #8a4b00; }\n</style>\n",
+  "storeOutMessages": true,
+  "passthru": false,
+  "resendOnRefresh": true,
+  "templateScope": "local",
+  "className": "",
+  "x": 640,
+  "y": 340,
+  "wires": [
+   [
+    "b1c2d3e4f5a60051"
+   ]
+  ]
+ },
+ {
+  "id": "b1c2d3e4f5a60051",
+  "type": "function",
+  "z": "b1c2d3e4f5a60001",
+  "name": "Changer de capteur",
+  "func": "// Vue technique – changer le capteur des grandes courbes : clic sur une tuile (choix de l'expert, mémorisé)\n// ou bascule automatique vers le capteur le plus critique. On relit ses 48 dernières heures dans la base (S3).\nconst id = Number(msg.payload && msg.payload.node_id);\nif (!Number.isFinite(id)) return null;\nif (!msg.payload.auto) flow.set(\"capteur_manuel\", id);\nflow.set(\"capteur_courbe\", id);\nmsg.node_id = id;\nmsg.params = { $node_id: id, $depuis: new Date(Date.now() - 2 * 86400000).toISOString() };\nreturn msg;\n",
+  "outputs": 1,
+  "timeout": 0,
+  "noerr": 0,
+  "initialize": "",
+  "finalize": "",
+  "libs": [],
+  "outputLabels": [],
+  "x": 860,
+  "y": 340,
+  "wires": [
+   [
+    "b1c2d3e4f5a60052"
+   ]
+  ]
+ },
+ {
+  "id": "b1c2d3e4f5a60052",
+  "type": "sqlite",
+  "z": "b1c2d3e4f5a60001",
+  "mydb": "c1d2e3f4a5b60002",
+  "sqlquery": "prepared",
+  "sql": "SELECT received_at, water_mm, water_valid, batt_v, next_min, lost_before\nFROM mesures\nWHERE node_id = $node_id AND received_at >= $depuis\nORDER BY received_at;",
+  "name": "Lire 48 h du capteur",
+  "x": 1060,
+  "y": 340,
+  "wires": [
+   [
+    "b1c2d3e4f5a60053"
+   ]
+  ]
+ },
+ {
+  "id": "b1c2d3e4f5a60053",
+  "type": "function",
+  "z": "b1c2d3e4f5a60001",
+  "name": "Courbes du capteur",
+  "func": "// Vue technique – reconstruire les deux courbes (niveau, batterie) pour le capteur choisi, à partir de la base.\n// Sorties : 1. courbe du niveau  2. courbe de la batterie  3. recalcul des vues (pour mettre à jour le choix)\nconst lignes = msg.payload || [];\nconst id = msg.node_id;\nconst a = (flow.get(\"alertes\") || {})[id];\nconst seuil = a ? a.seuil_mm : 300;\nconst serieSeuil = \"Seuil d'alerte – nœud \" + id, serieNiveau = \"Niveau – nœud \" + id, serieBatt = \"Batterie – nœud \" + id;\nconst seuils = [], niveau = [], batterie = [];\nlet precedent = null;\nfor (const l of lignes) {\n    const x = Date.parse(l.received_at);\n    // Mêmes règles que la vue en direct : courbe coupée avant des trames perdues et sur une mesure invalide ;\n    // en plus ici, coupée si le capteur est resté muet plus de 2 × next_min + 5 min.\n    const trou = l.lost_before > 0 || (precedent !== null && x - precedent > (2 * (l.next_min || 30) + 5) * 60000);\n    if (trou && precedent !== null) {\n        const xt = Math.round((precedent + x) / 2);\n        niveau.push({ serie: serieNiveau, x: xt, y: null });\n        batterie.push({ serie: serieBatt, x: xt, y: null });\n    }\n    seuils.push({ serie: serieSeuil, x: x, y: seuil });\n    niveau.push({ serie: serieNiveau, x: x, y: l.water_valid === 1 ? l.water_mm : null });\n    batterie.push({ serie: serieBatt, x: x, y: l.batt_v });\n    precedent = x;\n}\nreturn [\n    { action: \"replace\", payload: lignes.length ? seuils.concat(niveau) : [] },\n    { action: \"replace\", payload: lignes.length ? batterie : [] },\n    { topic: \"tic\" }\n];\n",
+  "outputs": 3,
+  "timeout": 0,
+  "noerr": 0,
+  "initialize": "",
+  "finalize": "",
+  "libs": [],
+  "outputLabels": [
+   "courbe niveau",
+   "courbe batterie",
+   "recalculer les vues"
+  ],
+  "x": 1260,
+  "y": 340,
+  "wires": [
+   [
+    "b1c2d3e4f5a60022"
+   ],
+   [
+    "b1c2d3e4f5a60023"
+   ],
+   [
+    "b1c2d3e4f5a60014"
+   ]
+  ]
+ },
+ {
+  "id": "b1c2d3e4f5a60030",
+  "type": "ui-page",
+  "name": "Historique",
+  "ui": "b1c2d3e4f5a60002",
+  "path": "/historique",
+  "icon": "history",
+  "layout": "grid",
+  "theme": "b1c2d3e4f5a60003",
+  "breakpoints": [
+   {
+    "name": "Default",
+    "px": "0",
+    "cols": "3"
+   },
+   {
+    "name": "Tablet",
+    "px": "576",
+    "cols": "6"
+   },
+   {
+    "name": "Small Desktop",
+    "px": "768",
+    "cols": "9"
+   },
+   {
+    "name": "Desktop",
+    "px": "1024",
+    "cols": "12"
+   }
+  ],
+  "order": 3,
+  "className": "",
+  "visible": "true",
+  "disabled": "false"
+ },
+ {
+  "id": "b1c2d3e4f5a60031",
+  "type": "ui-group",
+  "name": "Historique : choisir un capteur et une période",
+  "page": "b1c2d3e4f5a60030",
+  "width": "12",
+  "height": "1",
+  "order": 1,
+  "showTitle": true,
+  "className": "",
+  "visible": "true",
+  "disabled": "false",
+  "groupType": "default"
+ },
+ {
+  "id": "b1c2d3e4f5a60032",
+  "type": "ui-group",
+  "name": "Niveau d'eau",
+  "page": "b1c2d3e4f5a60030",
+  "width": "12",
+  "height": "1",
+  "order": 2,
+  "showTitle": true,
+  "className": "",
+  "visible": "true",
+  "disabled": "false",
+  "groupType": "default"
+ },
+ {
+  "id": "b1c2d3e4f5a60033",
+  "type": "ui-group",
+  "name": "Résumé de la période",
+  "page": "b1c2d3e4f5a60030",
+  "width": "12",
+  "height": "1",
+  "order": 3,
+  "showTitle": true,
+  "className": "",
+  "visible": "true",
+  "disabled": "false",
+  "groupType": "default"
+ },
+ {
+  "id": "b1c2d3e4f5a60040",
+  "type": "comment",
+  "z": "b1c2d3e4f5a60001",
+  "name": "Historique : relit la base S3 à la demande (capteur + période), sans toucher à la vue en direct",
+  "info": "",
+  "x": 300,
+  "y": 460,
+  "wires": []
+ },
+ {
+  "id": "b1c2d3e4f5a60041",
+  "type": "ui-template",
+  "z": "b1c2d3e4f5a60001",
+  "group": "b1c2d3e4f5a60031",
+  "page": "",
+  "ui": "",
+  "name": "Historique – choix",
+  "order": 1,
+  "width": "12",
+  "height": "0",
+  "head": "",
+  "format": "<template>\n  <div class=\"choix\">\n    <p v-if=\"!capteurs.length\" class=\"vide\">Aucune mesure enregistrée pour l'instant.</p>\n    <template v-else>\n      <label>Capteur\n        <select v-model=\"capteur\">\n          <option v-for=\"c in capteurs\" :key=\"c.node_id\" :value=\"c.node_id\">{{ c.nom }}</option>\n        </select>\n      </label>\n      <label>Période\n        <select v-model=\"jours\">\n          <option :value=\"1\">24 dernières heures</option>\n          <option :value=\"2\">48 dernières heures</option>\n          <option :value=\"7\">7 derniers jours</option>\n          <option :value=\"30\">30 derniers jours</option>\n        </select>\n      </label>\n      <button @click=\"afficher\">Afficher</button>\n      <a :href=\"'/pce92/mesures?node_id=' + capteur + '&jours=' + jours + '&format=csv'\">Exporter en CSV</a>\n    </template>\n  </div>\n</template>\n\n<script>\nexport default {\n  data () { return { capteurs: [], capteur: null, jours: 2 } },\n  mounted () { this.send({ payload: { action: 'liste' } }) },\n  watch: {\n    msg (m) {\n      if (m && m.payload && Array.isArray(m.payload.capteurs)) {\n        this.capteurs = m.payload.capteurs\n        if (this.capteurs.length && !this.capteurs.some(c => c.node_id === this.capteur)) {\n          this.capteur = this.capteurs[0].node_id\n          this.afficher()\n        }\n      }\n    }\n  },\n  methods: {\n    afficher () {\n      if (this.capteur !== null) this.send({ payload: { action: 'afficher', node_id: this.capteur, jours: this.jours } })\n    }\n  }\n}\n</script>\n\n<style scoped>\n.choix { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 16px; width: 100%; color: #202124; }\nlabel { display: flex; flex-direction: column; gap: 4px; font-size: 0.9rem; color: #5f6368; }\nselect { min-width: 200px; padding: 8px; border: 1px solid #c4c7c5; border-radius: 6px; font-size: 1rem; color: #202124; background: #ffffff; }\nbutton { padding: 9px 18px; border: none; border-radius: 6px; background: #1f3a5f; color: #ffffff; font-size: 1rem; cursor: pointer; }\na { padding: 9px 0; color: #1f3a5f; font-weight: 600; }\n.vide { color: #5f6368; }\n</style>\n",
+  "storeOutMessages": true,
+  "passthru": false,
+  "resendOnRefresh": true,
+  "templateScope": "local",
+  "className": "",
+  "x": 160,
+  "y": 520,
+  "wires": [
+   [
+    "b1c2d3e4f5a60042"
+   ]
+  ]
+ },
+ {
+  "id": "b1c2d3e4f5a60042",
+  "type": "function",
+  "z": "b1c2d3e4f5a60001",
+  "name": "Quelle requête ?",
+  "func": "// Historique – choisir la requête selon la demande de la page (liste des capteurs ou période d'un capteur).\nconst d = msg.payload || {};\nif (d.action === \"liste\") return [msg, null];\nif (d.action === \"afficher\") {\n    const jours = [1, 2, 7, 30].includes(Number(d.jours)) ? Number(d.jours) : 2;\n    msg.node_id = Number(d.node_id);\n    msg.jours = jours;\n    msg.depuis_iso = new Date(Date.now() - jours * 86400000).toISOString();\n    msg.params = { $depuis: msg.depuis_iso, $node_id: msg.node_id };\n    return [null, msg];\n}\nreturn null;\n",
+  "outputs": 2,
+  "timeout": 0,
+  "noerr": 0,
+  "initialize": "",
+  "finalize": "",
+  "libs": [],
+  "outputLabels": [
+   "liste des capteurs",
+   "période d'un capteur"
+  ],
+  "x": 360,
+  "y": 520,
+  "wires": [
+   [
+    "b1c2d3e4f5a60043"
+   ],
+   [
+    "b1c2d3e4f5a60047"
+   ]
+  ]
+ },
+ {
+  "id": "b1c2d3e4f5a60043",
+  "type": "sqlite",
+  "z": "b1c2d3e4f5a60001",
+  "mydb": "c1d2e3f4a5b60002",
+  "sqlquery": "fixed",
+  "sql": "SELECT node_id, COUNT(*) AS n FROM mesures GROUP BY node_id ORDER BY node_id;",
+  "name": "Lister les capteurs",
+  "x": 570,
+  "y": 480,
+  "wires": [
+   [
+    "b1c2d3e4f5a60044"
+   ]
+  ]
+ },
+ {
+  "id": "b1c2d3e4f5a60044",
+  "type": "function",
+  "z": "b1c2d3e4f5a60001",
+  "name": "Liste pour le choix",
+  "func": "// Historique – liste des capteurs présents dans la base, avec le nom du site donné par le moteur (seuils.csv).\nconst alertes = flow.get(\"alertes\") || {};\nconst capteurs = (msg.payload || []).map(l => ({\n    node_id: l.node_id,\n    nom: (alertes[l.node_id] && alertes[l.node_id].site ? alertes[l.node_id].site + \" (nœud \" + l.node_id + \")\" : \"Capteur n° \" + l.node_id)\n}));\nreturn { payload: { capteurs: capteurs } };\n",
+  "outputs": 1,
+  "timeout": 0,
+  "noerr": 0,
+  "initialize": "",
+  "finalize": "",
+  "libs": [],
+  "outputLabels": [],
+  "x": 780,
+  "y": 480,
+  "wires": [
+   [
+    "b1c2d3e4f5a60041"
+   ]
+  ]
+ },
+ {
+  "id": "b1c2d3e4f5a60047",
+  "type": "sqlite",
+  "z": "b1c2d3e4f5a60001",
+  "mydb": "c1d2e3f4a5b60002",
+  "sqlquery": "prepared",
+  "sql": "SELECT node_id, received_at, water_mm, water_valid, seq, next_min, lost_before\nFROM mesures\nWHERE node_id = $node_id AND received_at >= $depuis\nORDER BY received_at;",
+  "name": "Lire les mesures",
+  "x": 570,
+  "y": 560,
+  "wires": [
+   [
+    "b1c2d3e4f5a60048"
+   ]
+  ]
+ },
+ {
+  "id": "b1c2d3e4f5a60048",
+  "type": "function",
+  "z": "b1c2d3e4f5a60001",
+  "name": "Garder les mesures",
+  "func": "// Garde les mesures lues, puis passe à la lecture des événements de la même période.\nmsg.mesures = msg.payload || [];\nreturn msg;\n",
+  "outputs": 1,
+  "timeout": 0,
+  "noerr": 0,
+  "initialize": "",
+  "finalize": "",
+  "libs": [],
+  "outputLabels": [],
+  "x": 770,
+  "y": 560,
+  "wires": [
+   [
+    "b1c2d3e4f5a60049"
+   ]
+  ]
+ },
+ {
+  "id": "b1c2d3e4f5a60049",
+  "type": "sqlite",
+  "z": "b1c2d3e4f5a60001",
+  "mydb": "c1d2e3f4a5b60002",
+  "sqlquery": "prepared",
+  "sql": "SELECT received_at, type, details\nFROM evenements\nWHERE node_id = $node_id AND received_at >= $depuis\nORDER BY received_at;",
+  "name": "Lire les événements",
+  "x": 970,
+  "y": 560,
+  "wires": [
+   [
+    "b1c2d3e4f5a6004a"
+   ]
+  ]
+ },
+ {
+  "id": "b1c2d3e4f5a6004a",
+  "type": "function",
+  "z": "b1c2d3e4f5a60001",
+  "name": "Préparer l'historique",
+  "func": "// Historique – préparer la courbe et le résumé de la période choisie.\n// Sorties : 1. courbe (remplace tout le contenu)  2. résumé\nconst lignes = msg.mesures || [];\nconst evts = msg.payload || [];\nconst id = msg.node_id;\nconst a = (flow.get(\"alertes\") || {})[id];\nconst seuil = a ? a.seuil_mm : 300;\nconst seuilSource = a ? \"seuils.csv, via le moteur d'alerte\" : \"seuil de secours (le moteur n'a pas encore publié pour ce capteur)\";\nconst nom = a && a.site ? a.site + \" (nœud \" + id + \")\" : \"Capteur n° \" + id;\n\n// Courbe : la ligne de seuil d'abord (1re couleur : rouge), puis le niveau.\n// On coupe la courbe (point vide) : avant des trames perdues, sur une mesure invalide,\n// et quand le capteur est resté muet plus de 2 × next_min + 5 min.\nconst points = [];\nconst niveau = [];\nlet precedent = null;\nfor (const l of lignes) {\n    const x = Date.parse(l.received_at);\n    const periode = l.next_min || 30;\n    const trou = l.lost_before > 0 || (precedent !== null && x - precedent > (2 * periode + 5) * 60000);\n    if (trou && precedent !== null) niveau.push({ serie: \"Niveau\", x: Math.round((precedent + x) / 2), y: null });\n    niveau.push({ serie: \"Niveau\", x: x, y: l.water_valid === 1 ? l.water_mm : null });\n    precedent = x;\n}\nif (lignes.length) {\n    const debut = Date.parse(lignes[0].received_at), fin = Date.parse(lignes[lignes.length - 1].received_at);\n    points.push({ serie: \"Seuil d'alerte actuel (\" + seuil + \" mm)\", x: debut, y: seuil },\n                { serie: \"Seuil d'alerte actuel (\" + seuil + \" mm)\", x: fin, y: seuil });\n}\nconst courbe = { action: \"replace\", payload: points.concat(niveau) };\nif (!lignes.length) courbe.payload = [];\n\n// Résumé\nconst valides = lignes.filter(l => l.water_valid === 1);\n// Les trames perdues puis reçues en retard (événement trame_en_retard) ne comptent plus comme perdues.\nconst enRetard = evts.filter(l => l.type === \"trame_en_retard\").length;\nconst perdues = Math.max(0, lignes.reduce((t, l) => t + (l.lost_before || 0), 0) - enRetard);\nlet max = null;\nfor (const l of valides) if (!max || l.water_mm > max.water_mm) max = l;\nconst textes = {\n    trames_perdues: e => e.nombre + \" trame(s) perdue(s) avant la seq \" + e.seq,\n    doublon: e => e.en_retard ? \"doublon arrivé en retard, écarté (seq \" + e.seq + \")\" : \"doublon écarté (seq \" + e.seq + \")\",\n    trame_en_retard: e => \"trame perdue finalement reçue en retard (seq \" + e.seq + \", \" + (e.water_valid ? e.water_mm + \" mm\" : \"mesure invalide\")\n                        + \", mesurée vers \" + new Date(e.mesure_estimee_a).toLocaleString(\"fr-FR\", { timeZone: \"Europe/Paris\" }) + \")\",\n    retour_seq: e => \"compteur revenu en arrière (\" + e.seq_precedent + \" → \" + e.seq + \")\",\n    rejet: e => \"trame rejetée : \" + e.raison\n};\nconst evenements = evts.map(l => {\n    let e = {};\n    try { e = JSON.parse(l.details); } catch (err) { e = { type: l.type }; }\n    return { heure_iso: l.received_at, texte: textes[l.type] ? textes[l.type](e) : l.type };\n});\nconst resume = { payload: {\n    node_id: id, nom: nom, depuis_iso: msg.depuis_iso, jusqua_iso: new Date().toISOString(),\n    mesures: lignes.length, perdues: perdues,\n    taux: lignes.length ? Math.round(100 * (lignes.length + enRetard) / (lignes.length + enRetard + perdues)) + \" %\" : \"—\",\n    invalides: lignes.length - valides.length,\n    max_mm: max ? max.water_mm + \" mm\" : \"—\", max_iso: max ? max.received_at : null,\n    seuil_mm: seuil, seuil_source: seuilSource,\n    au_dessus: valides.filter(l => l.water_mm >= seuil).length,\n    premiere_iso: lignes.length ? lignes[0].received_at : null,\n    derniere_iso: lignes.length ? lignes[lignes.length - 1].received_at : null,\n    evenements: evenements\n} };\nnode.status({ fill: \"blue\", shape: \"dot\", text: nom + \" · \" + msg.jours + \" j · \" + lignes.length + \" mesure(s)\" });\nreturn [courbe, resume];\n",
+  "outputs": 2,
+  "timeout": 0,
+  "noerr": 0,
+  "initialize": "",
+  "finalize": "",
+  "libs": [],
+  "outputLabels": [
+   "courbe",
+   "résumé"
+  ],
+  "x": 1180,
+  "y": 600,
+  "wires": [
+   [
+    "b1c2d3e4f5a60046"
+   ],
+   [
+    "b1c2d3e4f5a6004b"
+   ]
+  ]
+ },
+ {
+  "id": "b1c2d3e4f5a60046",
+  "type": "ui-chart",
+  "z": "b1c2d3e4f5a60001",
+  "group": "b1c2d3e4f5a60032",
+  "name": "Historique – courbe",
+  "label": "Niveau d'eau (mm) sur la période choisie",
+  "order": 1,
+  "chartType": "line",
+  "category": "serie",
+  "categoryType": "property",
+  "xAxisLabel": "",
+  "xAxisProperty": "x",
+  "xAxisPropertyType": "property",
+  "xAxisType": "time",
+  "xAxisFormat": "{dd}/{MM} {HH}:{mm}",
+  "xAxisFormatType": "custom",
+  "xmin": "",
+  "xmax": "",
+  "yAxisLabel": "mm",
+  "yAxisProperty": "y",
+  "yAxisPropertyType": "property",
+  "ymin": "0",
+  "ymax": "",
+  "bins": 10,
+  "action": "replace",
+  "stackSeries": false,
+  "pointShape": "circle",
+  "pointRadius": 3,
+  "showLegend": true,
+  "removeOlder": "0",
+  "removeOlderUnit": "86400",
+  "removeOlderPoints": "",
+  "colors": [
+   "#B3261E",
+   "#0095FF"
+  ],
+  "textColor": [
+   "#666666"
+  ],
+  "textColorDefault": true,
+  "gridColor": [
+   "#e5e5e5"
+  ],
+  "gridColorDefault": true,
+  "width": "12",
+  "height": "6",
+  "className": "",
+  "interpolation": "linear",
+  "x": 1240,
+  "y": 520,
+  "wires": [
+   []
+  ]
+ },
+ {
+  "id": "b1c2d3e4f5a6004b",
+  "type": "ui-template",
+  "z": "b1c2d3e4f5a60001",
+  "group": "b1c2d3e4f5a60033",
+  "page": "",
+  "ui": "",
+  "name": "Historique – résumé",
+  "order": 1,
+  "width": "12",
+  "height": "0",
+  "head": "",
+  "format": "<template>\n  <div class=\"resume\">\n    <p v-if=\"!r.node_id\" class=\"vide\">Choisir un capteur et une période.</p>\n    <template v-else>\n      <p class=\"titre\"><strong>{{ r.nom }}</strong> · du {{ heure(r.depuis_iso) }} au {{ heure(r.jusqua_iso) }}</p>\n      <p v-if=\"!r.mesures\" class=\"vide\">Aucune mesure sur cette période.</p>\n      <template v-else>\n        <div class=\"chiffres\">\n          <div><span>{{ r.mesures }}</span>mesures reçues</div>\n          <div><span>{{ r.perdues }}</span>trames perdues</div>\n          <div><span>{{ r.taux }}</span>taux de réception</div>\n          <div><span>{{ r.invalides }}</span>mesures invalides</div>\n          <div><span>{{ r.max_mm }}</span>niveau maximal<br><small>{{ heure(r.max_iso) }}</small></div>\n          <div><span>{{ r.au_dessus }}</span>mesures au-dessus du seuil actuel ({{ r.seuil_mm }} mm)</div>\n        </div>\n        <p class=\"note\">Seuil : {{ r.seuil_source }}. Première mesure : {{ heure(r.premiere_iso) }} · dernière : {{ heure(r.derniere_iso) }}.</p>\n        <h4>Événements de la période</h4>\n        <p v-if=\"!r.evenements.length\" class=\"vide\">Aucun événement.</p>\n        <ul>\n          <li v-for=\"(e, i) in r.evenements\" :key=\"i\">{{ heure(e.heure_iso) }} · {{ e.texte }}</li>\n        </ul>\n      </template>\n    </template>\n  </div>\n</template>\n\n<script>\nexport default {\n  computed: { r () { return (this.msg && this.msg.payload) || {} } },\n  methods: {\n    heure (iso) {\n      return iso ? new Date(iso).toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—'\n    }\n  }\n}\n</script>\n\n<style scoped>\n.resume { width: 100%; color: #202124; }\n.titre { margin: 0 0 12px; }\n.chiffres { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 8px; }\n.chiffres div { border: 1px solid #d9d9e0; border-radius: 8px; padding: 8px 14px; min-width: 130px; color: #5f6368; font-size: 0.9rem; }\n.chiffres span { display: block; font-size: 1.6rem; font-weight: 700; color: #202124; }\n.note { font-size: 0.85rem; color: #5f6368; margin: 4px 0 0; }\nh4 { margin: 16px 0 8px; }\nul { margin: 0; padding-left: 18px; font-size: 0.9rem; }\n.vide { color: #5f6368; }\n</style>\n",
+  "storeOutMessages": true,
+  "passthru": false,
+  "resendOnRefresh": true,
+  "templateScope": "local",
+  "className": "",
+  "x": 1420,
+  "y": 600,
+  "wires": [
+   []
+  ]
+ }
+]

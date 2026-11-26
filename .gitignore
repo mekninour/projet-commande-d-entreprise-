@@ -22,6 +22,7 @@ flows_cred.json
 node_modules/
 
 # --- Python ---
+.seq_injecteur.json
 __pycache__/
 *.pyc
 .venv/
@@ -33,6 +34,8 @@ venv/
 **/data/redis/
 *.sqlite
 *.db
+*.db-shm
+*.db-wal
 
 # --- Éditeurs et systèmes ---
 .vscode/*

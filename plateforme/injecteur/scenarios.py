@@ -5,12 +5,18 @@ capteur émet, décrite par un dictionnaire :
 
     water_mm   niveau d'eau au-dessus du sol, en mm (None = mesure invalide, 0xFFFF)
     batt_v     tension de la batterie, en V (None = inconnue, 0xFF)
-    perdue     True = trame émise mais jamais reçue (seq avance, rien n'est publié)
-    doublon    True = la même trame est reçue deux fois
+    perdue     True = trame émise mais jamais reçue à temps (seq avance, rien n'est publié)
+
+Une étape peut aussi être un renvoi : {"renvoi": i}. Le capteur réémet plus tard la
+trame de l'étape i, à l'identique (même seq, même mesure). C'est ce qui se passe quand
+il renvoie ses mesures stockées après une coupure radio (L1, annexe A, § 2.1) :
+  - si la trame d'origine était arrivée, le renvoi est un doublon (en retard) ;
+  - si elle avait été perdue, le renvoi est une trame reçue en retard.
+Un renvoi ne fait pas avancer seq et arrive peu après la trame qui le précède.
 
 Le bit d'alerte est calculé par l'injecteur, comme le ferait le nœud :
 niveau >= seuil (300 mm par défaut, repère Géorisques).
-Le seq est calculé par l'injecteur : il avance à chaque étape, même perdue.
+Le seq est calculé par l'injecteur : il avance à chaque étape émise, même perdue.
 """
 
 import random
@@ -20,7 +26,7 @@ BATT_NORMALE = 3.30  # V, batterie LiFePO4 en fonctionnement normal
 
 
 def _etape(water_mm, batt_v=BATT_NORMALE, **options):
-    etape = {"water_mm": water_mm, "batt_v": batt_v, "perdue": False, "doublon": False}
+    etape = {"water_mm": water_mm, "batt_v": batt_v, "perdue": False}
     etape.update(options)
     return etape
 
@@ -56,18 +62,46 @@ def pic(seuil, rng):
     return etapes
 
 
-def trame_perdue(seuil, rng):
-    """Liaison radio dégradée : 3 trames perdues d'affilée (trou dans seq)."""
-    etapes = [_etape(_niveau(NIVEAU_NORMAL, rng)) for _ in range(10)]
-    for i in (4, 5, 6):
+def trame_perdue(seuil, rng, coupure=0):
+    """Liaison radio dégradée : pertes isolées au hasard (collisions), et une coupure si demandée."""
+    nb = 20 + coupure
+    etapes = [_etape(_niveau(NIVEAU_NORMAL, rng)) for _ in range(nb)]
+    # Pertes isolées : 3 trames au hasard, jamais deux voisines, ni la première ni la dernière
+    # (sinon la perte ne se voit pas : il faut une trame reçue avant et après).
+    candidates = list(range(1, nb - 1))
+    if coupure:
+        # Coupure de la passerelle ou du lien radio : « coupure » trames perdues d'affilée,
+        # au milieu de la série. Les pertes isolées sont placées loin de la coupure.
+        debut = nb // 2 - coupure // 2
+        for i in range(debut, debut + coupure):
+            etapes[i]["perdue"] = True
+        candidates = [i for i in candidates if i < debut - 1 or i > debut + coupure]
+    isolees = []
+    while len(isolees) < 3 and candidates:
+        i = rng.choice(candidates)
+        isolees.append(i)
+        candidates = [c for c in candidates if abs(c - i) > 1]
+    for i in isolees:
         etapes[i]["perdue"] = True
     return etapes
 
 
 def doublon(seuil, rng):
-    """Une trame reçue deux fois (même seq) : écart de seq nul = doublon."""
-    etapes = [_etape(_niveau(NIVEAU_NORMAL, rng)) for _ in range(6)]
-    etapes[3]["doublon"] = True
+    """Une trame déjà reçue (seq 4) revient plus tard, après la seq 7 : doublon en retard."""
+    etapes = [_etape(_niveau(NIVEAU_NORMAL, rng)) for _ in range(10)]
+    etapes.insert(7, {"renvoi": 3})
+    return etapes
+
+
+def retransmission_differee(seuil, rng):
+    """Coupure radio (seq 5 à 7 perdues), puis le capteur renvoie ses 4 dernières mesures (seq 4 à 7)."""
+    etapes = [_etape(_niveau(NIVEAU_NORMAL, rng)) for _ in range(12)]
+    for i in (4, 5, 6):
+        etapes[i]["perdue"] = True
+    # Après la seq 9, le capteur renvoie les seq 4 à 7 : la 4 était déjà arrivée (doublon en retard),
+    # les 5, 6 et 7 arrivent en retard. Ensuite, les trames reprennent normalement (seq 10 à 12).
+    for k, i in enumerate((3, 4, 5, 6)):
+        etapes.insert(9 + k, {"renvoi": i})
     return etapes
 
 
@@ -98,12 +132,15 @@ SCENARIOS = {
     "pic": pic,
     "trame_perdue": trame_perdue,
     "doublon": doublon,
+    "retransmission_differee": retransmission_differee,
     "capteur_muet": capteur_muet,
     "mesure_invalide": mesure_invalide,
     "batterie_faible": batterie_faible,
 }
 
 
-def generer(nom, seuil, graine=92):
+def generer(nom, seuil, graine=92, coupure=0):
     """Renvoie la liste des étapes du scénario (toujours la même pour une graine donnée)."""
+    if nom == "trame_perdue":
+        return trame_perdue(seuil, random.Random(graine), coupure)
     return SCENARIOS[nom](seuil, random.Random(graine))

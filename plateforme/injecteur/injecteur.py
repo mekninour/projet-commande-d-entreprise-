@@ -7,8 +7,8 @@ Deux formats de publication :
   brut       (par défaut) ce que publiera le récepteur LoRa point à point en V1 :
              la trame en hexadécimal + l'heure de réception + la qualité du signal.
              Topic : pce92/uplink
-  chirpstack l'ancien format ChirpStack v4 (event/up), décodé par le codec S1.
-             Gardé au cas où la chaîne repasse en LoRaWAN.
+  chirpstack le format ChirpStack v4 (event/up) du LoRaWAN privé, validé par le client.
+             Topic : application/<app-id>/device/<dev-eui>/event/up
 
 Exemples :
   python injecteur.py --liste
@@ -101,7 +101,7 @@ def message_brut(octets, recu_a, rng):
 
 
 def message_chirpstack(args, octets, recu_a, decodage, rng):
-    """Format event/up de ChirpStack v4 (si la chaîne repasse en LoRaWAN)."""
+    """Format event/up de ChirpStack v4 (LoRaWAN privé)."""
     message = {
         "deduplicationId": str(uuid.uuid4()),
         "time": recu_a,
@@ -138,6 +138,53 @@ class Publieur:
 
 
 # ---------------------------------------------------------------------------
+# 5. Planifier les envois : seq et heure de réception de chaque trame
+# ---------------------------------------------------------------------------
+def planifier(etapes, seq_depart, intervalle_s, debut):
+    """Étapes du scénario -> liste d'envois, dans l'ordre où ils arrivent.
+
+    Chaque envoi : {"etape", "seq", "recu_a" (datetime), "type"} avec type =
+      "normale" | "perdue" (rien n'est publié) | "renvoi" (même trame qu'une étape précédente).
+    Une trame émise occupe un créneau (toutes les intervalle_s). Un renvoi arrive peu après
+    l'envoi précédent (1/10 de la période), sans faire avancer seq.
+    """
+    envois, seq_de, emis = [], {}, 0
+    for i, e in enumerate(etapes):
+        if "renvoi" in e:
+            origine = e["renvoi"]
+            precedent = envois[-1]["recu_a"]
+            envois.append({"etape": etapes[origine], "seq": seq_de[origine], "type": "renvoi",
+                           "recu_a": precedent + timedelta(seconds=intervalle_s / 10)})
+        else:
+            seq_de[i] = (seq_depart + emis) % 65536
+            envois.append({"etape": e, "seq": seq_de[i], "type": "perdue" if e["perdue"] else "normale",
+                           "recu_a": debut + timedelta(seconds=emis * intervalle_s)})
+            emis += 1
+    return envois
+
+
+# ---------------------------------------------------------------------------
+# 6. Mémoriser le dernier seq de chaque nœud (comme le compteur d'un vrai capteur)
+# ---------------------------------------------------------------------------
+# Sans cette mémoire, relancer un scénario renverrait les seq 1, 2, 3… déjà reçus : la
+# réception S2 les prendrait pour des doublons en retard. Le fichier est local (pas dans git).
+FICHIER_SEQ = Path(__file__).resolve().parent / ".seq_injecteur.json"
+
+
+def lire_seqs():
+    try:
+        return json.loads(FICHIER_SEQ.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def ecrire_dernier_seq(node_id, seq):
+    seqs = lire_seqs()
+    seqs[str(node_id)] = seq
+    FICHIER_SEQ.write_text(json.dumps(seqs, indent=1), encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
 # Programme principal
 # ---------------------------------------------------------------------------
 def lire_arguments():
@@ -145,20 +192,30 @@ def lire_arguments():
     p.add_argument("--scenario", choices=sorted(SCENARIOS), help="scénario à rejouer")
     p.add_argument("--liste", action="store_true", help="affiche les scénarios disponibles")
     p.add_argument("--format", choices=["brut", "chirpstack"], default="brut",
-                   help="brut = récepteur LoRa point à point (V1, défaut) ; chirpstack = ancien format LoRaWAN")
+                   help="brut = récepteur LoRa point à point (défaut) ; chirpstack = uplink ChirpStack (LoRaWAN privé)")
     p.add_argument("--hote", default="localhost", help="broker MQTT (défaut : localhost)")
     p.add_argument("--port", type=int, default=1883)
     p.add_argument("--node-id", type=int, default=3, help="node_id écrit dans la trame (identifie le site)")
-    p.add_argument("--seq-depart", type=int, default=1, help="premier numéro de trame")
+    p.add_argument("--seq-depart", type=int, default=None,
+                   help="premier numéro de trame (défaut : la suite du dernier seq envoyé pour ce nœud)")
     p.add_argument("--seuil", type=int, default=300, help="seuil d'alerte du nœud, en mm (contrat : 300)")
     p.add_argument("--periode", type=int, default=30,
                    help="minutes entre deux trames, envoyées dans next_min (fréquence fixe en V1)")
     p.add_argument("--vitesse", type=float, default=900,
                    help="accélération du temps (900 = 30 min simulées en 2 s ; 1 = temps réel)")
+    p.add_argument("--coupure", type=int, default=0,
+                   help="trame_perdue uniquement : nombre de trames perdues d'affilée (coupure), en plus des pertes isolées")
+    p.add_argument("--graine", type=int, default=92,
+                   help="graine du hasard : la même graine donne toujours les mêmes pertes et mesures")
     p.add_argument("--app-id", default="00000000-0000-0000-0000-000000000000", help="format chirpstack uniquement")
     p.add_argument("--dev-eui", default="0000000000000001", help="format chirpstack uniquement")
     p.add_argument("--apercu", action="store_true", help="affiche les messages sans rien publier")
-    return p.parse_args()
+    args = p.parse_args()
+    if args.coupure and args.scenario != "trame_perdue":
+        p.error("--coupure ne s'utilise qu'avec --scenario trame_perdue")
+    if args.coupure < 0:
+        p.error("--coupure doit être positif")
+    return args
 
 
 def main():
@@ -166,59 +223,68 @@ def main():
     if args.liste or not args.scenario:
         print("Scénarios disponibles :")
         for nom, fonction in sorted(SCENARIOS.items()):
-            print(f"  {nom:<16} {fonction.__doc__.strip().splitlines()[0]}")
+            print(f"  {nom:<24} {fonction.__doc__.strip().splitlines()[0]}")
         return
 
-    rng = random.Random(92)
-    etapes = generer(args.scenario, args.seuil)
+    rng = random.Random(args.graine)
+    etapes = generer(args.scenario, args.seuil, args.graine, args.coupure)
     intervalle_s = args.periode * 60
+    if args.seq_depart is None:
+        args.seq_depart = (lire_seqs().get(str(args.node_id), 0) + 1) % 65536
 
     # Heures de réception simulées, espacées de --periode. En temps accéléré, le scénario
     # se termine « maintenant » (aucune date dans le futur) ; en temps réel, il démarre maintenant.
+    nb_emises = sum(1 for e in etapes if "renvoi" not in e)
     maintenant = datetime.now(timezone.utc)
-    debut = maintenant if args.vitesse == 1 else maintenant - timedelta(seconds=(len(etapes) - 1) * intervalle_s)
+    debut = maintenant if args.vitesse == 1 else maintenant - timedelta(seconds=(nb_emises - 1) * intervalle_s)
+    envois = planifier(etapes, args.seq_depart, intervalle_s, debut)
 
-    trames = []
-    for i, e in enumerate(etapes):
-        alerte = e["water_mm"] is not None and e["water_mm"] >= args.seuil
-        octets = encoder_trame(args.node_id, e["water_mm"], volts_vers_5mv(e["batt_v"]),
-                               args.seq_depart + i, alerte, args.periode)
-        recu_a = (debut + timedelta(seconds=i * intervalle_s)).isoformat(timespec="milliseconds").replace("+00:00", "Z")
-        trames.append((octets, recu_a, alerte))
+    for env in envois:
+        e = env["etape"]
+        env["alerte"] = e["water_mm"] is not None and e["water_mm"] >= args.seuil
+        env["octets"] = encoder_trame(args.node_id, e["water_mm"], volts_vers_5mv(e["batt_v"]),
+                                      env["seq"], env["alerte"], args.periode)
 
-    decodages = decoder_avec_codec([o for o, _, _ in trames]) if args.format == "chirpstack" else [{}] * len(trames)
+    decodages = (decoder_avec_codec([env["octets"] for env in envois]) if args.format == "chirpstack"
+                 else [{}] * len(envois))
     topic = TOPIC_BRUT if args.format == "brut" else f"application/{args.app_id}/device/{args.dev_eui}/event/up"
-    pause = intervalle_s / args.vitesse
     publieur = None if args.apercu else Publieur(args.hote, args.port)
-    print(f"Scénario « {args.scenario} » : {len(etapes)} trames, 1 toutes les {pause:.1f} s, topic {topic}\n")
+    print(f"Scénario « {args.scenario} » : {len(envois)} envois, 1 trame toutes les "
+          f"{intervalle_s / args.vitesse:.1f} s, topic {topic}, premier seq {args.seq_depart}\n")
 
+    dernier_seq = None
     try:
-        for i, (e, (octets, recu_a, alerte), dec) in enumerate(zip(etapes, trames, decodages)):
+        for i, (env, dec) in enumerate(zip(envois, decodages)):
+            e = env["etape"]
+            recu_a = env["recu_a"].isoformat(timespec="milliseconds").replace("+00:00", "Z")
             niveau = "invalide" if e["water_mm"] is None else f"{e['water_mm']} mm"
             batt = "inconnue" if e["batt_v"] is None else f"{e['batt_v']:.2f} V"
-            ligne = (f"[{i + 1:>2}/{len(etapes)}] seq={args.seq_depart + i:<4} niveau={niveau:<9} "
-                     f"batt={batt:<8} {'ALERTE' if alerte else ''}")
+            ligne = (f"[{i + 1:>2}/{len(envois)}] seq={env['seq']:<5} niveau={niveau:<9} "
+                     f"batt={batt:<8} {'ALERTE' if env['alerte'] else '      '}")
 
-            if e["perdue"]:
+            if env["type"] == "perdue":
                 print(ligne + "  -> PERDUE, non publiée")
             else:
-                envois = 2 if e["doublon"] else 1
-                for _ in range(envois):
-                    message = (message_brut(octets, recu_a, rng) if args.format == "brut"
-                               else message_chirpstack(args, octets, recu_a, dec, rng))
-                    if publieur:
-                        publieur.publier(topic, message)
-                    else:
-                        print(json.dumps(message, ensure_ascii=False, indent=2))
-                print(ligne + ("  -> publiée 2 fois (doublon)" if envois == 2 else "  -> publiée"))
+                message = (message_brut(env["octets"], recu_a, rng) if args.format == "brut"
+                           else message_chirpstack(args, env["octets"], recu_a, dec, rng))
+                if publieur:
+                    publieur.publier(topic, message)
+                else:
+                    print(json.dumps(message, ensure_ascii=False, indent=2))
+                print(ligne + ("  -> RENVOYÉE plus tard (même trame)" if env["type"] == "renvoi" else "  -> publiée"))
+            if env["type"] != "renvoi":
+                dernier_seq = env["seq"]
 
-            if i < len(etapes) - 1 and publieur:
-                time.sleep(pause)
+            if i < len(envois) - 1 and publieur:
+                attente = (envois[i + 1]["recu_a"] - env["recu_a"]).total_seconds() / args.vitesse
+                time.sleep(max(attente, 0))
     except KeyboardInterrupt:
         print("\nArrêt demandé.")
     finally:
         if publieur:
             publieur.fermer()
+            if dernier_seq is not None:
+                ecrire_dernier_seq(args.node_id, dernier_seq)
 
     if args.scenario == "capteur_muet":
         print(f"\nSilence simulé : la trame suivante était attendue dans {args.periode} min, elle n'arrivera pas.")

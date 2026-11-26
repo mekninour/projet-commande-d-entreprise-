@@ -1,0 +1,2 @@
+# Les scripts shell gardent des fins de ligne Unix, même extraits sous Windows (sinon ils échouent sur le Pi).
+*.sh text eol=lf

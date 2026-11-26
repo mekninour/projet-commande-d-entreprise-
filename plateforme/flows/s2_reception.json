@@ -1,0 +1,225 @@
+[
+  {
+    "id": "a1b2c3d4e5f60001",
+    "type": "tab",
+    "label": "S2 – Réception des trames",
+    "disabled": false,
+    "info": "Tâche S2 (B1). Deux entrées : pce92/uplink (récepteur point à point, injecteur) et application/+/device/+/event/up (ChirpStack, LoRaWAN privé) -> décodage (codec S1) -> contrôle seq -> pce92/mesures/<node_id> et pce92/evenements.\nVoir plateforme/flows/README.md."
+  },
+  {
+    "id": "a1b2c3d4e5f60002",
+    "type": "mqtt-broker",
+    "name": "Mosquitto local",
+    "broker": "localhost",
+    "port": "1883",
+    "clientid": "",
+    "autoConnect": true,
+    "usetls": false,
+    "protocolVersion": "4",
+    "keepalive": "60",
+    "cleansession": true,
+    "autoUnsubscribe": true,
+    "birthTopic": "",
+    "closeTopic": "",
+    "willTopic": ""
+  },
+  {
+    "id": "a1b2c3d4e5f60010",
+    "type": "comment",
+    "z": "a1b2c3d4e5f60001",
+    "name": "S2 : trame brute ou uplink ChirpStack -> mesure normalisée (contrat v1.2)",
+    "info": "",
+    "x": 230,
+    "y": 40,
+    "wires": []
+  },
+  {
+    "id": "a1b2c3d4e5f60011",
+    "type": "mqtt in",
+    "z": "a1b2c3d4e5f60001",
+    "name": "Trames reçues (point à point)",
+    "topic": "pce92/uplink",
+    "qos": "1",
+    "datatype": "json",
+    "broker": "a1b2c3d4e5f60002",
+    "nl": false,
+    "rap": true,
+    "rh": 0,
+    "inputs": 0,
+    "x": 130,
+    "y": 120,
+    "wires": [
+      [
+        "a1b2c3d4e5f60012"
+      ]
+    ]
+  },
+  {
+    "id": "a1b2c3d4e5f60014",
+    "type": "mqtt in",
+    "z": "a1b2c3d4e5f60001",
+    "name": "Uplinks ChirpStack (LoRaWAN)",
+    "topic": "application/+/device/+/event/up",
+    "qos": "1",
+    "datatype": "json",
+    "broker": "a1b2c3d4e5f60002",
+    "nl": false,
+    "rap": true,
+    "rh": 0,
+    "inputs": 0,
+    "x": 150,
+    "y": 180,
+    "wires": [
+      [
+        "a1b2c3d4e5f60015"
+      ]
+    ]
+  },
+  {
+    "id": "a1b2c3d4e5f60015",
+    "type": "function",
+    "z": "a1b2c3d4e5f60001",
+    "name": "0. Lire ChirpStack",
+    "func": "// S2 – Étape 0 : lire un uplink ChirpStack v4 (LoRaWAN privé) et le mettre au même format\n// que le récepteur point à point, pour que la suite du flux (étapes 1 et 2) soit commune.\n// Entrée : message JSON publié par ChirpStack sur application/<id>/device/<devEui>/event/up\n//   { deduplicationId, time, deviceInfo { devEui, deviceName }, fPort, fCnt, data (base64),\n//     object (si le codec est installé dans ChirpStack), rxInfo [ { rssi, snr, gwTime, nsTime, … } ] }\n// Sortie : { received_at, payload_hex, rssi, snr, source, dev_eui, fcnt } vers « 1. Décoder ».\n// La trame est toujours décodée ici par le codec S1, même si ChirpStack a déjà rempli « object » :\n// un seul décodage, le même pour les deux voies.\nconst up = msg.payload || {};\nconst rx = Array.isArray(up.rxInfo) ? up.rxInfo : [];\n// ChirpStack a déjà supprimé les réceptions en double (plusieurs passerelles) : rxInfo les liste.\n// On garde la meilleure réception (RSSI le plus fort).\nconst meilleure = rx.reduce((m, r) => (m === null || (r.rssi ?? -999) > (m.rssi ?? -999) ? r : m), null) || {};\n\n// Règle 4 du contrat : horodatage à la réception. On prend l'heure de la passerelle si elle\n// est connue (time, ou gwTime de la réception), sinon l'heure du serveur ChirpStack (nsTime),\n// sinon l'heure de Node-RED.\nconst recuA = up.time || meilleure.gwTime || meilleure.nsTime || new Date().toISOString();\n\nlet hex = null;\nif (typeof up.data === \"string\" && up.data.length) {\n    hex = Buffer.from(up.data, \"base64\").toString(\"hex\").toUpperCase();\n}\nconst devEui = (up.deviceInfo && up.deviceInfo.devEui) || null;\n\nmsg.payload = {\n    received_at: recuA,\n    payload_hex: hex,            // null si l'uplink n'a pas de données : « 1. Décoder » le rejettera\n    rssi: meilleure.rssi ?? null,\n    snr: meilleure.snr ?? null,\n    source: \"chirpstack\",\n    dev_eui: devEui,\n    fcnt: up.fCnt ?? null\n};\nnode.status({ fill: hex ? \"green\" : \"yellow\", shape: \"dot\",\n              text: (devEui || \"appareil inconnu\") + (up.fCnt !== undefined ? \" · fCnt \" + up.fCnt : \"\") });\nreturn msg;\n",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 190,
+    "y": 240,
+    "wires": [
+      [
+        "a1b2c3d4e5f60012"
+      ]
+    ]
+  },
+  {
+    "id": "a1b2c3d4e5f60012",
+    "type": "function",
+    "z": "a1b2c3d4e5f60001",
+    "name": "1. Décoder (codec S1)",
+    "func": "// S2 – Étape 1 : décoder la trame brute et produire une mesure normalisée.\n// Entrée : message du récepteur (ou de l'injecteur) sur pce92/uplink, ou uplink ChirpStack\n// déjà remis à ce format par « 0. Lire ChirpStack » :\n//   { received_at, payload_hex, rssi, snr, source }\n// Sortie 1 : mesure normalisée. Sortie 2 : trame rejetée.\nconst codec = global.get(\"codec\");\nif (!codec) {\n    node.error(\"Codec S1 non chargé : ajouter codec dans functionGlobalContext (voir plateforme/flows/README.md)\");\n    node.status({ fill: \"red\", shape: \"ring\", text: \"codec absent\" });\n    return null;\n}\n\nconst entree = msg.payload || {};\nconst recuA = entree.received_at || new Date().toISOString(); // règle 4 : horodatage à la réception\n\nfunction rejet(raison) {\n    node.warn(\"Trame rejetée : \" + raison);\n    return [null, {\n        topic: \"pce92/evenements\",\n        payload: { type: \"rejet\", raison: raison, received_at: recuA,\n                   payload_hex: entree.payload_hex || null, source: entree.source || null }\n    }];\n}\n\nif (typeof entree.payload_hex !== \"string\") {\n    return rejet(\"message sans payload_hex\");\n}\nconst hex = entree.payload_hex.replace(/\\s+/g, \"\");\nif (!/^[0-9a-fA-F]*$/.test(hex) || hex.length % 2 !== 0) {\n    return rejet(\"payload_hex n'est pas de l'hexadécimal valide\");\n}\n\nconst octets = hex.match(/../g).map(h => parseInt(h, 16));\nconst res = codec.decodeUplink({ bytes: octets });\nif (res.errors) {\n    return rejet(res.errors.join(\" ; \"));\n}\n\nconst d = res.data;\nmsg.topic = \"pce92/mesures/\" + d.node_id;\nmsg.payload = {\n    node_id: d.node_id,\n    received_at: recuA,\n    water_mm: d.water_valid ? d.water_mm : null,  // null = mesure invalide (0xFFFF)\n    water_valid: d.water_valid,\n    batt_v: d.batt_v,                             // null = tension inconnue (0xFF)\n    seq: d.seq,\n    alert: d.alert,\n    next_min: d.next_min,                         // null = inconnu (0xFF)\n    expected_next_at: d.next_min === null ? null\n        : new Date(Date.parse(recuA) + d.next_min * 60000).toISOString(),\n    rssi: entree.rssi ?? null,\n    snr: entree.snr ?? null,\n    source: entree.source ?? null,\n    payload_hex: hex.toUpperCase(),\n    warnings: res.warnings\n};\nif (res.warnings.length) {\n    node.warn(\"Nœud \" + d.node_id + \", seq \" + d.seq + \" : \" + res.warnings.join(\" ; \"));\n}\nnode.status({ fill: d.alert ? \"red\" : \"green\", shape: \"dot\",\n              text: \"nœud \" + d.node_id + \" · seq \" + d.seq + \" · \" + (d.water_valid ? d.water_mm + \" mm\" : \"invalide\") });\nreturn [msg, null];\n",
+    "outputs": 2,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "outputLabels": [
+      "mesure",
+      "rejet"
+    ],
+    "x": 340,
+    "y": 120,
+    "wires": [
+      [
+        "a1b2c3d4e5f60013"
+      ],
+      [
+        "a1b2c3d4e5f60021",
+        "a1b2c3d4e5f60031"
+      ]
+    ]
+  },
+  {
+    "id": "a1b2c3d4e5f60013",
+    "type": "function",
+    "z": "a1b2c3d4e5f60001",
+    "name": "2. Contrôler seq (règle 5)",
+    "func": "// S2 – Étape 2 : contrôler le compteur seq (règle 5 du contrat).\n// Écart = (seq - dernier seq) modulo 65536, par nœud :\n//   = 1          : trame normale ;\n//   > 1          : trames perdues (la mesure est gardée) ;\n//   = 0          : doublon (écarté) ;\n//   > 32768      : la trame est plus ancienne que la dernière reçue. Trois cas :\n//     - seq déjà reçu, trame identique        -> doublon en retard (écarté) ;\n//     - seq compté comme perdu                 -> trame reçue en retard : elle n'est pas\n//       publiée comme mesure actuelle (son heure de mesure est inconnue en v1.2 :\n//       annexe A, une ancienne mesure ne doit pas déclencher d'alerte nouvelle). Elle est\n//       gardée dans le journal des événements, et retirée du compte des pertes ;\n//     - sinon                                   -> retour en arrière du compteur\n//       (redémarrage du nœud) : la mesure est gardée, la mémoire du nœud repart de zéro.\n// Mémoire par nœud : le dernier seq, les MEMOIRE derniers seq reçus (avec leur trame)\n// et les seq perdus récents. Elle repart de zéro au redémarrage de Node-RED.\n// Sortie 1 : mesure acceptée. Sortie 2 : événement.\nconst MEMOIRE = 64;\nconst m = msg.payload;\nconst cle = \"seq_\" + m.node_id;\nconst etat = flow.get(cle);\nconst precedent = etat ? etat.dernier : undefined;\nconst ecart = etat ? (m.seq - precedent + 65536) % 65536 : null;\n\nfunction evenement(type, details) {\n    return {\n        topic: \"pce92/evenements\",\n        payload: Object.assign({ type: type, node_id: m.node_id, seq: m.seq, received_at: m.received_at }, details)\n    };\n}\n\n// Garde la trame reçue en mémoire (les MEMOIRE plus récentes).\nfunction retenir(e) {\n    e.recus[m.seq] = m.payload_hex;\n    e.ordre.push(m.seq);\n    while (e.ordre.length > MEMOIRE) delete e.recus[e.ordre.shift()];\n}\n\n// 1. Première trame de ce nœud depuis le démarrage de Node-RED : pas de contrôle possible.\nif (!etat) {\n    const e = { dernier: m.seq, dernier_recu_a: m.received_at, next_min: m.next_min, recus: {}, ordre: [], perdus: [] };\n    retenir(e);\n    flow.set(cle, e);\n    m.seq_gap = null;\n    m.lost_before = 0;\n    node.status({ fill: \"green\", shape: \"dot\", text: \"nœud \" + m.node_id + \" · seq \" + m.seq });\n    return [msg, null];\n}\n\n// 2. Doublon immédiat (même seq que la dernière trame).\nif (ecart === 0) {\n    node.status({ fill: \"yellow\", shape: \"ring\", text: \"doublon écarté · nœud \" + m.node_id + \" · seq \" + m.seq });\n    return [null, evenement(\"doublon\", { en_retard: false })];\n}\n\n// 3. Trame plus ancienne que la dernière reçue.\nif (ecart > 32768) {\n    const retard = (precedent - m.seq + 65536) % 65536;   // en nombre de trames\n    if (etat.recus[m.seq] !== undefined && etat.recus[m.seq] === m.payload_hex) {\n        node.status({ fill: \"yellow\", shape: \"ring\", text: \"doublon en retard écarté · nœud \" + m.node_id + \" · seq \" + m.seq });\n        return [null, evenement(\"doublon\", { en_retard: true, retard_trames: retard })];\n    }\n    const i = etat.perdus.indexOf(m.seq);\n    if (i >= 0) {\n        etat.perdus.splice(i, 1);\n        retenir(etat);\n        flow.set(cle, etat);\n        // Heure de mesure estimée : le contrat v1.2 ne la transmet pas. On la reconstruit à partir\n        // de la dernière trame reçue et de la période (next_min), comme le propose l'annexe A.\n        const periode = (etat.next_min || m.next_min || 30) * 60000;\n        const estimee = new Date(Date.parse(etat.dernier_recu_a) - retard * periode).toISOString();\n        node.status({ fill: \"blue\", shape: \"ring\", text: \"trame en retard · nœud \" + m.node_id + \" · seq \" + m.seq });\n        return [null, evenement(\"trame_en_retard\", {\n            retard_trames: retard, mesure_estimee_a: estimee,\n            water_mm: m.water_mm, water_valid: m.water_valid, batt_v: m.batt_v, alert: m.alert\n        })];\n    }\n    // Redémarrage du nœud : la mémoire repart de cette trame.\n    const e = { dernier: m.seq, dernier_recu_a: m.received_at, next_min: m.next_min, recus: {}, ordre: [], perdus: [] };\n    retenir(e);\n    flow.set(cle, e);\n    m.seq_gap = ecart;\n    m.lost_before = 0;\n    node.status({ fill: \"yellow\", shape: \"dot\", text: \"compteur revenu en arrière · nœud \" + m.node_id + \" · seq \" + m.seq });\n    return [msg, evenement(\"retour_seq\", { seq_precedent: precedent })];\n}\n\n// 4. Trame normale (écart 1) ou trames perdues juste avant (écart > 1).\nlet evt = null;\nm.seq_gap = ecart;\nm.lost_before = ecart - 1;\nif (m.lost_before > 0) {\n    evt = evenement(\"trames_perdues\", { nombre: m.lost_before, seq_precedent: precedent });\n    for (let k = 1; k <= m.lost_before; k++) etat.perdus.push((precedent + k) % 65536);\n    // On ne garde que les pertes récentes (au plus MEMOIRE trames derrière la dernière).\n    etat.perdus = etat.perdus.filter(s => (m.seq - s + 65536) % 65536 <= MEMOIRE);\n}\netat.dernier = m.seq;\netat.dernier_recu_a = m.received_at;\netat.next_min = m.next_min;\nretenir(etat);\nflow.set(cle, etat);\nnode.status({ fill: m.lost_before ? \"yellow\" : \"green\", shape: \"dot\",\n              text: \"nœud \" + m.node_id + \" · seq \" + m.seq + (m.lost_before ? \" · \" + m.lost_before + \" perdue(s)\" : \"\") });\nreturn [msg, evt];\n",
+    "outputs": 2,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "outputLabels": [
+      "mesure acceptée",
+      "événement"
+    ],
+    "x": 580,
+    "y": 120,
+    "wires": [
+      [
+        "a1b2c3d4e5f60020",
+        "a1b2c3d4e5f60030"
+      ],
+      [
+        "a1b2c3d4e5f60021",
+        "a1b2c3d4e5f60031"
+      ]
+    ]
+  },
+  {
+    "id": "a1b2c3d4e5f60020",
+    "type": "mqtt out",
+    "z": "a1b2c3d4e5f60001",
+    "name": "Mesures",
+    "topic": "",
+    "qos": "1",
+    "retain": "false",
+    "respTopic": "",
+    "contentType": "",
+    "userProps": "",
+    "correl": "",
+    "expiry": "",
+    "broker": "a1b2c3d4e5f60002",
+    "x": 840,
+    "y": 100,
+    "wires": []
+  },
+  {
+    "id": "a1b2c3d4e5f60021",
+    "type": "mqtt out",
+    "z": "a1b2c3d4e5f60001",
+    "name": "Événements",
+    "topic": "",
+    "qos": "1",
+    "retain": "false",
+    "respTopic": "",
+    "contentType": "",
+    "userProps": "",
+    "correl": "",
+    "expiry": "",
+    "broker": "a1b2c3d4e5f60002",
+    "x": 850,
+    "y": 200,
+    "wires": []
+  },
+  {
+    "id": "a1b2c3d4e5f60030",
+    "type": "debug",
+    "z": "a1b2c3d4e5f60001",
+    "name": "Voir les mesures",
+    "active": true,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "payload",
+    "targetType": "msg",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 860,
+    "y": 140,
+    "wires": []
+  },
+  {
+    "id": "a1b2c3d4e5f60031",
+    "type": "debug",
+    "z": "a1b2c3d4e5f60001",
+    "name": "Voir les événements",
+    "active": true,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "payload",
+    "targetType": "msg",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 870,
+    "y": 240,
+    "wires": []
+  }
+]

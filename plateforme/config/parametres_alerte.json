@@ -4,5 +4,9 @@
   "hysteresis_pct": 10,
   "temps_avant_seuil_min": 15,
   "montee_rapide_mm_h": 200,
-  "saut_max_mm": 1500
+  "saut_max_mm": 1500,
+  "muet_facteur_next_min": 2,
+  "muet_marge_min": 5,
+  "muet_next_min_defaut": 30,
+  "muet_controle_s": 60
 }
